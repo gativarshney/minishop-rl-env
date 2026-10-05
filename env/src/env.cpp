@@ -38,7 +38,7 @@ json MinishopEnv::observe() {
         });
         const s = window.__state;
         return {screen: s.screen.replace('-screen', ''), popup_showing: popup, buttons: buttons,
-                state: {qty: s.qty, cart_item: s.cartItem, cart_qty: s.cartQty, delay_pending: s.delayPending},
+                state: {viewing: s.product, qty: s.qty, cart_item: s.cartItem, cart_qty: s.cartQty, delay_pending: s.delayPending},
                 order: window.__orderResult};
     })())JS";
     json raw = eval(js);
@@ -80,7 +80,18 @@ json MinishopEnv::reset(const std::string& item, int qty, int seed, double popup
         throw;
     }
     cdp_ms_ = 0;
-    return observe();
+    json obs = observe();
+    return {{"observation", obs}, {"info", infoFromPage()}};
+}
+
+json MinishopEnv::infoFromPage() const {
+    json info = {{"current_qty", last_raw_["state"]["qty"]},
+                 {"viewing_item", last_raw_["state"]["viewing"]},
+                 {"cart_item", last_raw_["state"]["cart_item"]},
+                 {"cart_qty", last_raw_["state"]["cart_qty"]},
+                 {"delay_pending", last_raw_["state"]["delay_pending"]}};
+    if (!last_raw_["order"].is_null()) info["order"] = last_raw_["order"];
+    return info;
 }
 
 // A real mouse click: move, press, release at the button centre through CDP.
@@ -150,15 +161,12 @@ StepResult MinishopEnv::step(const std::string& action_type, int action_i) {
     }
 
     json obs = observe();
-    info["current_qty"] = last_raw_["state"]["qty"];
-    info["cart_item"] = last_raw_["state"]["cart_item"];
-    info["cart_qty"] = last_raw_["state"]["cart_qty"];
-    info["delay_pending"] = last_raw_["state"]["delay_pending"];
+    json page_info = infoFromPage();  // keep it alive while iterating
+    for (auto& kv : page_info.items()) info[kv.key()] = kv.value();
 
     bool done = !last_raw_["order"].is_null();
     double reward = -0.01;  // small cost per step so shorter paths are better
     if (done) {
-        info["order"] = last_raw_["order"];
         reward = last_raw_["order"].value("success", false) ? 1.0 : -1.0;  // page's own verdict
     }
     bool truncated = !done && steps_ >= kMaxSteps;

@@ -50,9 +50,9 @@ int main(int argc, char** argv) {
             json req = json::parse(line);
             std::string cmd = req.value("cmd", "");
             if (cmd == "reset") {
-                json obs = env.reset(req.value("item", "blue-mug"), req.value("qty", 1), req.value("seed", 42),
+                json r = env.reset(req.value("item", "blue-mug"), req.value("qty", 1), req.value("seed", 42),
                                      req.value("popup_p", 0.0), req.value("delay_p", 0.0));
-                res = {{"status", "ok"}, {"observation", obs}};
+                res = {{"status", "ok"}, {"observation", r["observation"]}, {"info", r["info"]}};
             } else if (cmd == "step") {
                 StepResult r = env.step(req.value("action", "wait"), req.value("i", -1));
                 res = {{"status", "ok"}, {"observation", r.observation}, {"reward", r.reward},

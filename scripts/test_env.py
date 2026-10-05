@@ -4,7 +4,7 @@ sys.path.insert(0, __import__("os").path.dirname(__file__))
 from env_client import Env
 
 env = Env()
-obs = env.reset("blue-mug", 2, 42, 0.0, 0.0)
+obs, info = env.reset("blue-mug", 2, 42, 0.0, 0.0)
 print("reset:", obs["screen"], [b["text"] for b in obs["buttons"]])
 
 
@@ -18,7 +18,7 @@ for text in ["+", "Add to cart", "Checkout"]:
     r = click_text(r["observation"], text)
     print(text, "->", r["observation"]["screen"], r["reward"], r["done"], r["info"], r["time_ms"], "ms")
 assert r["done"] and r["reward"] == 1.0 and r["info"]["order"]["success"], "purchase should succeed"
-obs = env.reset("red-lamp", 3, 7, 0.0, 0.0)  # browser reuse
+obs, info = env.reset("red-lamp", 3, 7, 0.0, 0.0)  # browser reuse
 print("second reset ok:", obs["screen"])
 env.close()
 print("OK")

@@ -20,6 +20,7 @@ public:
     explicit MinishopEnv(const std::string& site_path) : site_path_(site_path) {}
 
     // Opens the page fresh for one attempt. The browser itself is reused.
+    // Returns {observation, info}; both are read from the live page.
     nlohmann::json reset(const std::string& item, int qty, int seed, double popup_p, double delay_p);
     // action_type is "click" (uses action_i) or "wait".
     StepResult step(const std::string& action_type, int action_i);
@@ -32,6 +33,7 @@ private:
     // One CDP Runtime.evaluate that returns a JSON value.
     nlohmann::json eval(const std::string& js, int timeout_ms = 3000);
     nlohmann::json observe();  // live read of screen, popup, buttons, page state
+    nlohmann::json infoFromPage() const;  // extra facts from window.__state / __orderResult
     void realClick(double x, double y);
     void settle();
 

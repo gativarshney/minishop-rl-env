@@ -37,8 +37,10 @@ class Env:
         return res
 
     def reset(self, item, qty, seed, popup_p, delay_p):
-        return self._call({"cmd": "reset", "item": item, "qty": qty, "seed": seed,
-                           "popup_p": popup_p, "delay_p": delay_p})["observation"]
+        """Returns (observation, info), both read from the live page."""
+        r = self._call({"cmd": "reset", "item": item, "qty": qty, "seed": seed,
+                        "popup_p": popup_p, "delay_p": delay_p})
+        return r["observation"], r["info"]
 
     def step(self, action):
         """action is ('click', i) or ('wait', None)."""
