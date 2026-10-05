@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MiniShop</title>
+    <style>
+        body { font-family: sans-serif; margin: 20px; }
+        .screen { display: none; }
+        .screen.active { display: block; }
+        .product-list { display: flex; flex-direction: column; gap: 10px; margin-top: 10px; }
+        .product-item { padding: 10px; border: 1px solid #ccc; display: flex; justify-content: space-between; align-items: center; }
+        .controls { display: flex; gap: 10px; margin-top: 10px; }
+    </style>
+</head>
+<body>
+    <div id="catalog-screen" class="screen active">
+        <h1>MiniShop Catalog</h1>
+        <div class="product-list" id="products">
+            <div class="product-item">
+                <span>Blue Mug</span>
+                <button data-id="blue-mug" onclick="viewProduct('blue-mug', 'Blue Mug')">View</button>
+            </div>
+            <div class="product-item">
+                <span>Red Lamp</span>
+                <button data-id="red-lamp" onclick="viewProduct('red-lamp', 'Red Lamp')">View</button>
+            </div>
+            <div class="product-item">
+                <span>Green Book</span>
+                <button data-id="green-book" onclick="viewProduct('green-book', 'Green Book')">View</button>
+            </div>
+            <div class="product-item">
+                <span>Black Pen</span>
+                <button data-id="black-pen" onclick="viewProduct('black-pen', 'Black Pen')">View</button>
+            </div>
+        </div>
+        <div style="margin-top: 20px;">
+            <button onclick="showScreen('newsletter-screen')">Newsletter</button>
+        </div>
+    </div>
+
+    <div id="newsletter-screen" class="screen">
+        <h1>Newsletter</h1>
+        <p>Subscribe for updates.</p>
+        <button onclick="showScreen('catalog-screen')">Back</button>
+    </div>
+
+    <div id="product-screen" class="screen">
+        <h1 id="product-title">Product</h1>
+        <p>Quantity: <span id="product-qty">1</span></p>
+        <div class="controls">
+            <button onclick="changeQty(-1)">-</button>
+            <button onclick="changeQty(1)">+</button>
+        </div>
+        <div class="controls">
+            <button onclick="addToCart()">Add to cart</button>
+            <button onclick="showScreen('catalog-screen')">Back</button>
+        </div>
+    </div>
+
+    <script>
+        let currentProduct = null;
+        let currentProductName = '';
+        let quantity = 1;
+
+        function showScreen(id) {
+            document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+            document.getElementById(id).classList.add('active');
+        }
+
+        function viewProduct(id, name) {
+            currentProduct = id;
+            currentProductName = name;
+            quantity = 1;
+            document.getElementById('product-title').innerText = name;
+            document.getElementById('product-qty').innerText = quantity;
+            showScreen('product-screen');
+        }
+
+        function changeQty(delta) {
+            quantity += delta;
+            if (quantity < 1) quantity = 1;
+            if (quantity > 3) quantity = 3;
+            document.getElementById('product-qty').innerText = quantity;
+        }
+
+        function addToCart() {
+            // Cart functionality will be implemented in the next step
+            console.log("Added to cart: " + currentProduct + " x" + quantity);
+        }
+    </script>
+</body>
+</html>
