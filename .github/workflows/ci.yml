@@ -3,25 +3,21 @@ on: [push, workflow_dispatch]
 jobs:
   build-and-test:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     env:
+      # Chrome is preinstalled on ubuntu-latest
       CHROME_BIN: /usr/bin/google-chrome
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y cmake build-essential
-          pip install -r requirements.txt
+      - name: Install Python packages
+        run: pip install -r requirements.txt
       - name: Check browser
         run: $CHROME_BIN --version
-      - name: Run end to end
-        run: |
-          chmod +x run.sh
-          ./run.sh
+      - name: Build, train, evaluate, analyze
+        run: ./run.sh
       - name: Upload results
         if: always()
         uses: actions/upload-artifact@v4
@@ -30,4 +26,4 @@ jobs:
           path: |
             logs/
             report.md
-            *.png
+            charts/
