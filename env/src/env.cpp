@@ -1,174 +1,167 @@
 #include "env.hpp"
-#include <iostream>
 #include <chrono>
 #include <thread>
-#include <filesystem>
 
-MinishopEnv::MinishopEnv() {}
-MinishopEnv::~MinishopEnv() {}
+using json = nlohmann::json;
+using Clock = std::chrono::steady_clock;
 
-nlohmann::json MinishopEnv::reset(const std::string& item, int qty, int seed, double popup_p, double delay_p, const std::string& html_path) {
+static long long msSince(Clock::time_point t) {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - t).count();
+}
+
+json MinishopEnv::eval(const std::string& js, int timeout_ms) {
+    auto t = Clock::now();
+    json res = browser_.sendCommand("Runtime.evaluate",
+                                    {{"expression", js}, {"returnByValue", true}}, timeout_ms);
+    cdp_ms_ += msSince(t);
+    if (res["result"].contains("exceptionDetails"))
+        throw std::runtime_error("page script error: " + res["result"]["exceptionDetails"].dump());
+    return res["result"]["result"].value("value", json());
+}
+
+// Everything the agent may know is read from the live page here, nothing is hard-coded.
+json MinishopEnv::observe() {
+    static const char* js = R"JS((() => {
+        const popup = window.__state.popupShowing;
+        const buttons = [];
+        document.querySelectorAll('button').forEach((b, i) => {
+            const r = b.getBoundingClientRect();
+            if (r.width === 0 || r.height === 0) return;  // on a hidden screen
+            const visible = getComputedStyle(b).visibility !== 'hidden';
+            let clickable = false;
+            if (visible && !b.disabled) {
+                // clickable only if the topmost element at the centre is this button
+                const el = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+                clickable = (el === b || b.contains(el));
+            }
+            buttons.push({i: i, text: b.innerText, data_id: b.dataset.id || '', clickable: clickable});
+        });
+        const s = window.__state;
+        return {screen: s.screen.replace('-screen', ''), popup_showing: popup, buttons: buttons,
+                state: {qty: s.qty, cart_item: s.cartItem, cart_qty: s.cartQty, delay_pending: s.delayPending},
+                order: window.__orderResult};
+    })())JS";
+    json raw = eval(js);
+    last_raw_ = raw;
+    return {{"screen", raw["screen"]}, {"goal", goal_}, {"popup_showing", raw["popup_showing"]},
+            {"buttons", raw["buttons"]}};
+}
+
+json MinishopEnv::reset(const std::string& item, int qty, int seed, double popup_p, double delay_p) {
     steps_ = 0;
-    current_goal_ = item + " x" + std::to_string(qty);
-    
-    std::string path_str = html_path;
-    for (char& c : path_str) { if (c == '\\') c = '/'; }
-    if (path_str.length() > 0 && path_str[0] != '/') path_str = "/" + path_str;
-    
-    std::string url = "file://" + path_str + "?item=" + item + "&qty=" + std::to_string(qty) + 
-                      "&seed=" + std::to_string(seed) + "&popup_p=" + std::to_string(popup_p) + 
+    cdp_ms_ = settle_ms_ = 0;
+    goal_ = item + " x" + std::to_string(qty);
+
+    // Reuse the browser; relaunch only if it is not running (first call or after a crash).
+    if (!browser_.alive()) browser_.launch();
+
+    std::string path;
+    for (char c : site_path_) {
+        if (c == '\\') path += '/';
+        else if (c == ' ') path += "%20";
+        else path += c;
+    }
+    if (path.empty() || path[0] != '/') path = "/" + path;  // C:/x -> /C:/x for file:///
+    std::string url = "file://" + path + "?item=" + item + "&qty=" + std::to_string(qty) +
+                      "&seed=" + std::to_string(seed) + "&popup_p=" + std::to_string(popup_p) +
                       "&delay_p=" + std::to_string(delay_p);
-    
-    // Launch/restart browser
-    browser_.close();
-    browser_.launch(url);
-    
-    waitForSettle();
-    
-    return getObservation();
+    try {
+        browser_.sendCommand("Page.navigate", {{"url", url}}, 5000);
+        // wait until the new page has run its script (window.__state exists for this URL)
+        auto t = Clock::now();
+        const std::string check = "(window.__state && location.search.indexOf('seed=" + std::to_string(seed) +
+                                  "&') >= 0 && document.readyState === 'complete')";
+        while (!eval(check).get<bool>()) {
+            if (msSince(t) > 8000) throw std::runtime_error("page load timeout");
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+    } catch (...) {
+        browser_.close();  // a broken browser is replaced on the next reset
+        throw;
+    }
+    cdp_ms_ = 0;
+    return observe();
 }
 
-StepResult MinishopEnv::step(int action_i, const std::string& action_type) {
-    auto start = std::chrono::steady_clock::now();
-    
-    if (action_type == "click" && action_i >= 0) {
-        // get button coordinates
-        std::string script = R"(
-            (function(i) {
-                let buttons = Array.from(document.querySelectorAll('button'));
-                let b = buttons[i];
-                if (!b) return null;
-                let rect = b.getBoundingClientRect();
-                return {x: rect.left + rect.width/2, y: rect.top + rect.height/2};
-            })()
-        )";
-        script.insert(script.find("()"), "(" + std::to_string(action_i) + ")");
-        
-        nlohmann::json params = {
-            {"expression", script},
-            {"returnByValue", true}
-        };
-        auto res = browser_.sendCommand("Runtime.evaluate", params);
-        if (res.contains("result") && res["result"].contains("result") && res["result"]["result"].contains("value") && res["result"]["result"]["value"].is_object()) {
-            auto val = res["result"]["result"]["value"];
-            click(val["x"].get<int>(), val["y"].get<int>());
-        }
+// A real mouse click: move, press, release at the button centre through CDP.
+void MinishopEnv::realClick(double x, double y) {
+    auto t = Clock::now();
+    browser_.sendCommand("Input.dispatchMouseEvent", {{"type", "mouseMoved"}, {"x", x}, {"y", y}});
+    browser_.sendCommand("Input.dispatchMouseEvent",
+                         {{"type", "mousePressed"}, {"x", x}, {"y", y}, {"button", "left"}, {"clickCount", 1}});
+    browser_.sendCommand("Input.dispatchMouseEvent",
+                         {{"type", "mouseReleased"}, {"x", x}, {"y", y}, {"button", "left"}, {"clickCount", 1}});
+    cdp_ms_ += msSince(t);
+}
+
+// Poll until two reads in a row are identical, but give up after 150 ms. Delayed
+// buttons (up to 300 ms) can still be hidden afterwards: the agent then has to wait.
+void MinishopEnv::settle() {
+    auto t = Clock::now();
+    json prev = last_raw_;
+    // brief pause so the click handler's DOM changes have landed
+    std::this_thread::sleep_for(std::chrono::milliseconds(15));
+    while (msSince(t) < 150) {
+        observe();
+        if (last_raw_ == prev) break;
+        prev = last_raw_;
+        std::this_thread::sleep_for(std::chrono::milliseconds(15));
     }
-    
-    waitForSettle();
-    
+    settle_ms_ += msSince(t);
+}
+
+StepResult MinishopEnv::step(const std::string& action_type, int action_i) {
+    auto start = Clock::now();
+    cdp_ms_ = settle_ms_ = 0;
+    json info = json::object();
     steps_++;
-    auto obs = getObservation();
-    
-    // Check if done
-    bool done = false;
-    double reward = -0.01;
-    nlohmann::json info = {{"current_qty", 1}, {"cart_item", "None"}};
-    
-    nlohmann::json eval_params = {{"expression", "window.__orderResult"}, {"returnByValue", true}};
-    auto res = browser_.sendCommand("Runtime.evaluate", eval_params);
-    if (res.contains("result") && res["result"].contains("result") && res["result"]["result"].contains("value") && res["result"]["result"]["value"].is_object()) {
-        auto val = res["result"]["result"]["value"];
-        done = true;
-        if (val.value("success", false)) {
-            reward = 1.0;
+    try {
+        if (action_type == "click") {
+            // fresh position lookup; the button may have moved or vanished since the last read
+            std::string js = "(() => { const b = document.querySelectorAll('button')[" + std::to_string(action_i) +
+                             "]; if (!b) return null; const r = b.getBoundingClientRect();"
+                             " return {x: r.left + r.width / 2, y: r.top + r.height / 2, w: r.width}; })()";
+            json pos = eval(js);
+            if (pos.is_null() || pos["w"].get<double>() == 0) {
+                info["invalid_action"] = "no such visible button";  // wasted step, nothing is clicked
+            } else {
+                // Click even if covered or hidden: the page decides, like for a real user.
+                bool was_clickable = false;
+                for (auto& b : last_raw_["buttons"])
+                    if (b["i"] == action_i) was_clickable = b["clickable"];
+                if (!was_clickable) info["click_blocked"] = true;
+                realClick(pos["x"].get<double>(), pos["y"].get<double>());
+            }
+        } else if (action_type == "wait") {
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
         } else {
-            reward = -1.0;
+            info["invalid_action"] = "unknown action type";
         }
+        // settle() needs a baseline read taken before it starts comparing
+        observe();
+        settle();
+    } catch (const std::exception& e) {
+        // Timeouts or a dead browser end the attempt cleanly; the next reset relaunches.
+        browser_.close();
+        info["error"] = e.what();
+        return {json{{"screen", "unknown"}, {"goal", goal_}, {"popup_showing", false},
+                     {"buttons", json::array()}},
+                -0.01, false, true, info, msSince(start), cdp_ms_, settle_ms_, false};
     }
-    
-    // Extract info
-    eval_params["expression"] = "(() => { return {qty: typeof quantity !== 'undefined' ? quantity : 1, cartItem: typeof cartItem !== 'undefined' && cartItem ? cartItem : 'None'}; })()";
-    res = browser_.sendCommand("Runtime.evaluate", eval_params);
-    if (res.contains("result") && res["result"].contains("result") && res["result"]["result"].contains("value") && res["result"]["result"]["value"].is_object()) {
-        auto val = res["result"]["result"]["value"];
-        info["current_qty"] = val.value("qty", 1);
-        info["cart_item"] = val.value("cartItem", "None");
-    }
-    
-    bool truncated = steps_ >= 20;
-    if (truncated) done = true;
-    
-    auto end = std::chrono::steady_clock::now();
-    long long time_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
-    
-    return {obs, reward, done, truncated, info, time_ms, popup_showing_};
-}
 
-nlohmann::json MinishopEnv::getObservation() {
-    std::string script = R"(
-        (() => {
-            let screen = "unknown";
-            let active = document.querySelector('.screen.active');
-            if (active) screen = active.id.replace('-screen', '');
-            
-            let popup = document.getElementById('popup-overlay');
-            let popupShowing = popup && popup.style.display === 'block';
-            
-            let buttons = Array.from(document.querySelectorAll('button'));
-            let btnList = [];
-            for (let i = 0; i < buttons.length; i++) {
-                let b = buttons[i];
-                let rect = b.getBoundingClientRect();
-                let visible = rect.width > 0 && rect.height > 0 && window.getComputedStyle(b).visibility !== 'hidden';
-                let clickable = false;
-                if (visible) {
-                    let centerX = rect.left + rect.width / 2;
-                    let centerY = rect.top + rect.height / 2;
-                    let el = document.elementFromPoint(centerX, centerY);
-                    clickable = (el === b || b.contains(el));
-                }
-                btnList.push({
-                    i: i,
-                    text: b.innerText,
-                    id: b.getAttribute('data-id') || '',
-                    clickable: clickable
-                });
-            }
-            return {
-                screen: screen,
-                popup_showing: popupShowing,
-                buttons: btnList
-            };
-        })()
-    )";
-    nlohmann::json params = {{"expression", script}, {"returnByValue", true}};
-    auto res = browser_.sendCommand("Runtime.evaluate", params);
-    
-    nlohmann::json obs = {{"screen", "unknown"}, {"goal", current_goal_}, {"buttons", nlohmann::json::array()}};
-    if (res.contains("result") && res["result"].contains("result") && res["result"]["result"].contains("value")) {
-        auto val = res["result"]["result"]["value"];
-        obs["screen"] = val.value("screen", "unknown");
-        obs["buttons"] = val.value("buttons", nlohmann::json::array());
-        popup_showing_ = val.value("popup_showing", false);
-        obs["popup_showing"] = popup_showing_;
-    }
-    return obs;
-}
+    json obs = observe();
+    info["current_qty"] = last_raw_["state"]["qty"];
+    info["cart_item"] = last_raw_["state"]["cart_item"];
+    info["cart_qty"] = last_raw_["state"]["cart_qty"];
+    info["delay_pending"] = last_raw_["state"]["delay_pending"];
 
-void MinishopEnv::click(int x, int y) {
-    browser_.sendCommand("Input.dispatchMouseEvent", {
-        {"type", "mouseMoved"}, {"x", x}, {"y", y}
-    });
-    browser_.sendCommand("Input.dispatchMouseEvent", {
-        {"type", "mousePressed"}, {"x", x}, {"y", y}, {"button", "left"}, {"clickCount", 1}
-    });
-    browser_.sendCommand("Input.dispatchMouseEvent", {
-        {"type", "mouseReleased"}, {"x", x}, {"y", y}, {"button", "left"}, {"clickCount", 1}
-    });
-}
-
-void MinishopEnv::waitForSettle() {
-    // Basic polling to wait for buttons to become visible (in case of delay)
-    for (int i=0; i<10; i++) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(50));
-        auto obs = getObservation();
-        bool any_visible = false;
-        for (auto& b : obs["buttons"]) {
-            if (b["clickable"] == true) {
-                any_visible = true; break;
-            }
-        }
-        if (any_visible) break;
+    bool done = !last_raw_["order"].is_null();
+    double reward = -0.01;  // small cost per step so shorter paths are better
+    if (done) {
+        info["order"] = last_raw_["order"];
+        reward = last_raw_["order"].value("success", false) ? 1.0 : -1.0;  // page's own verdict
     }
+    bool truncated = !done && steps_ >= kMaxSteps;
+    return {obs, reward, done, truncated, info, msSince(start), cdp_ms_, settle_ms_,
+            last_raw_["popup_showing"].get<bool>()};
 }

@@ -2,35 +2,44 @@
 #include "browser.hpp"
 #include <string>
 #include <nlohmann/json.hpp>
-#include <chrono>
 
 struct StepResult {
     nlohmann::json observation;
     double reward;
-    bool done;
-    bool truncated;
+    bool done;       // an order was placed (right or wrong)
+    bool truncated;  // stopped for taking too long (step limit or error)
     nlohmann::json info;
-    long long time_ms;
+    long long time_ms;    // whole step, wall clock
+    long long cdp_ms;     // time spent waiting on CDP replies
+    long long settle_ms;  // time spent waiting for the page to stop changing
     bool popup_showing;
 };
 
 class MinishopEnv {
 public:
-    MinishopEnv();
-    ~MinishopEnv();
+    explicit MinishopEnv(const std::string& site_path) : site_path_(site_path) {}
 
-    nlohmann::json reset(const std::string& item, int qty, int seed, double popup_p, double delay_p, const std::string& html_path);
-    StepResult step(int action_i, const std::string& action_type); // action_type: "click" or "wait"
+    // Opens the page fresh for one attempt. The browser itself is reused.
+    nlohmann::json reset(const std::string& item, int qty, int seed, double popup_p, double delay_p);
+    // action_type is "click" (uses action_i) or "wait".
+    StepResult step(const std::string& action_type, int action_i);
+
+    void close() { browser_.close(); }
+
+    static constexpr int kMaxSteps = 20;
 
 private:
-    nlohmann::json getObservation();
-    void click(int x, int y);
-    void waitForSettle();
+    // One CDP Runtime.evaluate that returns a JSON value.
+    nlohmann::json eval(const std::string& js, int timeout_ms = 3000);
+    nlohmann::json observe();  // live read of screen, popup, buttons, page state
+    void realClick(double x, double y);
+    void settle();
 
     Browser browser_;
+    std::string site_path_;
+    std::string goal_;
     int steps_ = 0;
-    std::string current_goal_;
-    
-    // Last read state
-    bool popup_showing_ = false;
+    long long cdp_ms_ = 0;
+    long long settle_ms_ = 0;
+    nlohmann::json last_raw_;  // last page read (screen, popup, buttons, state)
 };

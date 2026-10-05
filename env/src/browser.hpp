@@ -6,34 +6,40 @@
 #include <unordered_map>
 #include <mutex>
 
+// Starts one headless Chrome/Edge and talks raw CDP to it over a WebSocket.
 class Browser {
 public:
     Browser();
     ~Browser();
 
-    void launch(const std::string& start_url = "about:blank");
+    // Starts the browser and attaches to its first page. Throws on failure.
+    void launch();
+    // Kills the whole browser process tree and removes the profile dir.
     void close();
+    bool alive() const { return launched_; }
 
-    nlohmann::json sendCommand(const std::string& method, const nlohmann::json& params = nlohmann::json::object());
+    // Sends a CDP command to the page and waits at most timeout_ms for the reply.
+    nlohmann::json sendCommand(const std::string& method,
+                               const nlohmann::json& params = nlohmann::json::object(),
+                               int timeout_ms = 5000);
+
+    // Called from signal / console handlers: kill the browser without cleanup.
+    static void emergencyKill();
 
 private:
     std::string findChromeBinary();
-    std::string createTempDir();
-    void removeTempDir(const std::string& path);
-    std::string readWsUrl(const std::string& port_file_path);
+    std::string readWsUrl(const std::string& port_file_path, int timeout_ms);
+    void killProcessTree();
+    bool rawSend(const std::string& method, const nlohmann::json& params,
+                 const std::string& session, int timeout_ms, nlohmann::json& out);
 
-    std::string ws_url_;
     ix::WebSocket webSocket_;
+    std::string session_id_;  // CDP session of the page target
     int next_id_ = 1;
+    bool launched_ = false;
 
     std::unordered_map<int, std::promise<nlohmann::json>> pending_requests_;
     std::mutex ws_mutex_;
 
-#ifdef _WIN32
-    void* process_handle_ = nullptr;
-    void* job_handle_ = nullptr;
-#else
-    int pid_ = -1;
-#endif
     std::string temp_dir_;
 };

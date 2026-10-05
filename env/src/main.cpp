@@ -1,61 +1,74 @@
+// JSON-lines front end: one request per stdin line, one reply per stdout line.
 #include "env.hpp"
 #include <iostream>
 #include <string>
-#include <nlohmann/json.hpp>
+#include <csignal>
+#ifdef _WIN32
+#include <windows.h>
+#endif
 
 using json = nlohmann::json;
 
-int main() {
-    MinishopEnv env;
+// If we are interrupted or the console closes, take the browser down with us.
+#ifdef _WIN32
+static BOOL WINAPI onConsole(DWORD) {
+    Browser::emergencyKill();
+    return FALSE;  // let the default handler end the process
+}
+#else
+static void onSignal(int sig) {
+    Browser::emergencyKill();
+    std::signal(sig, SIG_DFL);
+    std::raise(sig);
+}
+#endif
 
+int main(int argc, char** argv) {
+    std::string site;
+    for (int i = 1; i + 1 < argc; ++i)
+        if (std::string(argv[i]) == "--site") site = argv[i + 1];
+    if (site.empty()) {
+        std::cerr << "usage: minishop_env --site <absolute path to index.html>\n";
+        return 2;
+    }
+
+#ifdef _WIN32
+    SetConsoleCtrlHandler(onConsole, TRUE);
+#else
+    std::signal(SIGINT, onSignal);
+    std::signal(SIGTERM, onSignal);
+    std::signal(SIGHUP, onSignal);
+    std::signal(SIGPIPE, SIG_IGN);
+#endif
+
+    MinishopEnv env(site);  // its destructor closes the browser on normal exit
     std::string line;
     while (std::getline(std::cin, line)) {
         if (line.empty()) continue;
+        json res;
         try {
             json req = json::parse(line);
             std::string cmd = req.value("cmd", "");
-            
             if (cmd == "reset") {
-                std::string item = req.value("item", "blue-mug");
-                int qty = req.value("qty", 1);
-                int seed = req.value("seed", 42);
-                double popup_p = req.value("popup_p", 0.0);
-                double delay_p = req.value("delay_p", 0.0);
-                std::string html_path = req.value("html_path", "");
-                
-                json obs = env.reset(item, qty, seed, popup_p, delay_p, html_path);
-                json res = {
-                    {"status", "ok"},
-                    {"observation", obs}
-                };
-                std::cout << res.dump() << std::endl;
+                json obs = env.reset(req.value("item", "blue-mug"), req.value("qty", 1), req.value("seed", 42),
+                                     req.value("popup_p", 0.0), req.value("delay_p", 0.0));
+                res = {{"status", "ok"}, {"observation", obs}};
             } else if (cmd == "step") {
-                int action_i = req.value("action_i", -1);
-                std::string action_type = req.value("action_type", "wait");
-                
-                StepResult step_res = env.step(action_i, action_type);
-                
-                json res = {
-                    {"status", "ok"},
-                    {"observation", step_res.observation},
-                    {"reward", step_res.reward},
-                    {"done", step_res.done},
-                    {"truncated", step_res.truncated},
-                    {"info", step_res.info},
-                    {"time_ms", step_res.time_ms},
-                    {"popup_showing", step_res.popup_showing}
-                };
-                std::cout << res.dump() << std::endl;
+                StepResult r = env.step(req.value("action", "wait"), req.value("i", -1));
+                res = {{"status", "ok"}, {"observation", r.observation}, {"reward", r.reward},
+                       {"done", r.done}, {"truncated", r.truncated}, {"info", r.info},
+                       {"time_ms", r.time_ms}, {"cdp_ms", r.cdp_ms}, {"settle_ms", r.settle_ms},
+                       {"popup_showing", r.popup_showing}};
             } else if (cmd == "close") {
                 break;
             } else {
-                json res = {{"status", "error"}, {"error", "unknown command"}};
-                std::cout << res.dump() << std::endl;
+                res = {{"status", "error"}, {"error", "unknown command"}};
             }
         } catch (const std::exception& e) {
-            json res = {{"status", "error"}, {"error", e.what()}};
-            std::cout << res.dump() << std::endl;
+            res = {{"status", "error"}, {"error", e.what()}};
         }
+        std::cout << res.dump() << std::endl;  // endl flushes so Python never waits on a buffer
     }
+    env.close();
     return 0;
 }
