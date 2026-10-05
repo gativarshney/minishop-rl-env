@@ -66,11 +66,12 @@ json MinishopEnv::reset(const std::string& item, int qty, int seed, double popup
                       "&seed=" + std::to_string(seed) + "&popup_p=" + std::to_string(popup_p) +
                       "&delay_p=" + std::to_string(delay_p);
     try {
+        // go through about:blank so we can never read the previous attempt's page by mistake
+        browser_.sendCommand("Page.navigate", {{"url", "about:blank"}}, 5000);
         browser_.sendCommand("Page.navigate", {{"url", url}}, 5000);
         // wait until the new page has run its script (window.__state exists for this URL)
         auto t = Clock::now();
-        const std::string check = "(window.__state && location.search.indexOf('seed=" + std::to_string(seed) +
-                                  "&') >= 0 && document.readyState === 'complete')";
+        const std::string check = "!!(window.__state && document.readyState === 'complete')";
         while (!eval(check).get<bool>()) {
             if (msSince(t) > 8000) throw std::runtime_error("page load timeout");
             std::this_thread::sleep_for(std::chrono::milliseconds(10));

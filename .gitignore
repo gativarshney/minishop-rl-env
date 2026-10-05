@@ -12,7 +12,8 @@ CMakeFiles/
 *.lib
 *.exp
 out/
-logs/
+logs/parts/
+logs/trial.jsonl
 .vs/
 .vscode/
 tmp/

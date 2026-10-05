@@ -1,177 +1,305 @@
+"""Reads ONLY the JSON-lines log and writes report.md and PNG charts. Nothing here is typed in by hand:
+every number and every sentence is computed from the log."""
+import argparse
 import json
-import os
 import math
-import pandas as pd
-import numpy as np
-import matplotlib.pyplot as plt
+import os
+from collections import Counter, defaultdict
 
-def calc_ci(successes, trials):
-    if trials == 0:
-        return 0, 0
-    p = successes / trials
-    z = 1.96
-    denominator = 1 + z**2/trials
-    center = (p + z**2 / (2*trials)) / denominator
-    spread = z * math.sqrt(p*(1-p)/trials + z**2/(4*trials**2)) / denominator
-    return max(0, center - spread), min(1, center + spread)
+import matplotlib
+matplotlib.use("Agg")  # no display needed, also on CI
+import matplotlib.pyplot as plt
+import numpy as np
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+DEFAULT_P = 0.15  # the task's own popup setting
+
+
+def wilson(k, n, z=1.96):
+    """95% Wilson score interval for k successes out of n attempts."""
+    if n == 0:
+        return 0.0, 0.0, 0.0
+    p = k / n
+    d = 1 + z * z / n
+    c = (p + z * z / (2 * n)) / d
+    h = z * math.sqrt(p * (1 - p) / n + z * z / (4 * n * n)) / d
+    # clamp: rounding can push the bounds a hair past p when p is 0 or 1
+    return p, max(0.0, min(p, c - h)), min(1.0, max(p, c + h))
+
+
+def pct(x):
+    return f"{100 * x:.1f}%"
+
+
+def load(path):
+    """Returns list of (parsed record, raw line)."""
+    rows = []
+    with open(path) as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                rows.append((json.loads(line), line))
+    return rows
+
+
+def build_episodes(rows):
+    """Group step lines into attempts. The key identifies one attempt uniquely."""
+    groups = defaultdict(list)
+    for rec, raw in rows:
+        key = (rec["phase"], rec["agent"], rec["run"], rec["popup_p"], rec["episode"])
+        groups[key].append((rec, raw))
+    eps = []
+    for key, steps in groups.items():
+        steps.sort(key=lambda s: s[0]["step"])
+        last, last_raw = steps[-1]
+        order = last["info"].get("order")
+        eps.append({
+            "phase": key[0], "agent": key[1], "run": key[2], "popup_p": key[3], "episode": key[4],
+            "goal": last["goal"], "seed": last["seed"], "steps": len(steps),
+            "success": bool(order and order.get("success")),
+            "order": order, "truncated": last["truncated"], "error": last["info"].get("error"),
+            "last_screen": last["observation"]["screen"], "last_raw": last_raw, "last": last,
+            "popup_steps": sum(1 for s, _ in steps if s["popup_showing"]),
+            "any_popup": any(s["popup_showing"] for s, _ in steps),
+            "waits": sum(1 for s, _ in steps if s["action"] == "wait"),
+            "reward": sum(s["reward"] for s, _ in steps),
+        })
+    return eps
+
+
+def failure_reason(ep):
+    """Category of a failed attempt, decided by code from the final log line."""
+    if ep["error"]:
+        return "environment_error"
+    o = ep["order"]
+    if o is not None:
+        item = ep["goal"].split(" x")[0]
+        qty = int(ep["goal"].split(" x")[1])
+        if o["item"] is None:
+            return "checked_out_empty_cart"
+        if o["item"] != item:
+            return "wrong_item_ordered"
+        if o["qty"] != qty:
+            return "wrong_quantity_ordered"
+    return f"step_limit_on_{ep['last_screen']}_screen"
+
+
+def rate_row(eps):
+    k = sum(e["success"] for e in eps)
+    p, lo, hi = wilson(k, len(eps))
+    return k, len(eps), p, lo, hi
+
 
 def main():
-    if not os.path.exists("logs/run.jsonl"):
-        print("No logs found.")
-        return
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--log", default=os.path.join(ROOT, "logs", "run.jsonl"))
+    ap.add_argument("--report", default=os.path.join(ROOT, "report.md"))
+    ap.add_argument("--charts", default=os.path.join(ROOT, "charts"))
+    a = ap.parse_args()
+    os.makedirs(a.charts, exist_ok=True)
 
-    logs = []
-    with open("logs/run.jsonl", "r") as f:
-        for line in f:
-            if line.strip():
-                logs.append(json.loads(line))
+    rows = load(a.log)
+    eps = build_episodes(rows)
+    steps = [r for r, _ in rows]
+    ev = [e for e in eps if e["phase"] == "eval"]
+    tr = [e for e in eps if e["phase"] == "train"]
+    md = []
 
-    if not logs:
-        print("Empty logs.")
-        return
+    md.append("# MiniShop RL report\n")
+    md.append(f"Computed by `scripts/analyze.py` from `{os.path.relpath(a.log, ROOT)}`: "
+              f"{len(rows)} step lines, {len(eps)} attempts ({len(tr)} training, {len(ev)} evaluation).\n")
 
-    # Process logs per episode
-    episodes = {}
-    for l in logs:
-        # group by agent, phase, popup_p, seed (run_seed implicitly tied to seed ranges but let's use exact seed)
-        agent = l.get("agent", "unknown")
-        phase = l.get("phase", "eval")
-        popup_p = l.get("popup_p", 0.0)
-        seed = l.get("seed", -1)
-        ep_id = (agent, phase, popup_p, seed)
-        
-        if ep_id not in episodes:
-            episodes[ep_id] = {"done": False, "reward": 0, "steps": 0, "truncated": False, "log_lines": []}
-            
-        episodes[ep_id]["steps"] += 1
-        episodes[ep_id]["log_lines"].append(l)
-        if l.get("done", False):
-            episodes[ep_id]["done"] = True
-            episodes[ep_id]["reward"] = l.get("reward", 0)
-        if l.get("truncated", False):
-            episodes[ep_id]["truncated"] = True
+    # ---------- 1. success rates ----------
+    md.append("## 1. Success rate of both agents\n")
+    md.append(f"Evaluation attempts on unseen seeds, popup_p={DEFAULT_P}, "
+              f"delay_p={ev[0]['last']['delay_p'] if ev else 'n/a'}. 95% Wilson confidence interval.\n")
+    md.append("| agent | successes | attempts | success rate | 95% CI |\n|---|---|---|---|---|")
+    main_rows = {}
+    for ag in ("random", "qlearning"):
+        sub = [e for e in ev if e["agent"] == ag and e["popup_p"] == DEFAULT_P]
+        if not sub:
+            continue
+        k, n, p, lo, hi = rate_row(sub)
+        main_rows[ag] = (p, lo, hi)
+        md.append(f"| {ag} | {k} | {n} | {pct(p)} | {pct(lo)} to {pct(hi)} |")
+    md.append("")
+    if len(main_rows) == 2:
+        r, q = main_rows["random"], main_rows["qlearning"]
+        verdict = ("do not overlap" if q[1] > r[2] or r[1] > q[2] else "overlap")
+        md.append(f"The two confidence intervals {verdict}.\n")
+        fig, ax = plt.subplots(figsize=(4.5, 3.5))
+        names = list(main_rows)
+        vals = [main_rows[n][0] for n in names]
+        err = [[main_rows[n][0] - main_rows[n][1] for n in names], [main_rows[n][2] - main_rows[n][0] for n in names]]
+        ax.bar(names, vals, yerr=err, capsize=5, color=["#9aa5b1", "#2b7a78"])
+        ax.set_ylim(0, 1)
+        ax.set_ylabel("success rate")
+        ax.set_title("Success rate (95% Wilson CI)")
+        fig.tight_layout()
+        fig.savefig(os.path.join(a.charts, "success_rates.png"), dpi=120)
+        plt.close(fig)
+        md.append("![success rates](charts/success_rates.png)\n")
 
-    # 1. Success Rates
-    report = "# MiniShop RL Report\n\n## Success Rates\n"
-    for agent_target in ["random", "qlearning"]:
-        trials = 0
-        successes = 0
-        for ep_id, ep_data in episodes.items():
-            agent, phase, popup_p, seed = ep_id
-            if agent == agent_target and phase == "eval" and popup_p == 0.15:
-                trials += 1
-                if ep_data["done"] and ep_data["reward"] > 0:
-                    successes += 1
-        if trials > 0:
-            low, high = calc_ci(successes, trials)
-            report += f"{agent_target.capitalize()} agent: {successes/trials*100:.1f}% [{low*100:.1f}%, {high*100:.1f}%]\n"
-            
-    # 2. Popup sweep
-    report += "\n## Q-learning Popup Sweep\n"
-    sweep_results = []
-    for p_val in [0.0, 0.15, 0.4]:
-        trials = 0
-        successes = 0
-        for ep_id, ep_data in episodes.items():
-            agent, phase, popup_p, seed = ep_id
-            if agent == "qlearning" and phase == "eval" and abs(popup_p - p_val) < 0.01:
-                trials += 1
-                if ep_data["done"] and ep_data["reward"] > 0:
-                    successes += 1
-        if trials > 0:
-            low, high = calc_ci(successes, trials)
-            rate = successes / trials
-            sweep_results.append((p_val, rate, low, high))
-            report += f"popup_p={p_val}: {rate*100:.1f}% [{low*100:.1f}%, {high*100:.1f}%]\n"
-            
-    # 3. Failures
-    report += "\n## Failure Analysis (Q-learning eval)\n"
-    failures = {"truncated": [], "wrong_item": [], "wrong_quantity": [], "other": []}
-    for ep_id, ep_data in episodes.items():
-        agent, phase, popup_p, seed = ep_id
-        if agent == "qlearning" and phase == "eval":
-            if not ep_data["done"] or ep_data["reward"] <= 0:
-                # categorize
-                if ep_data["truncated"]:
-                    failures["truncated"].append(ep_data["log_lines"][-1])
-                else:
-                    # simplistic check based on reward
-                    failures["other"].append(ep_data["log_lines"][-1])
-                    
-    fail_counts = {k: len(v) for k, v in failures.items()}
-    sorted_fails = sorted(fail_counts.items(), key=lambda x: x[1], reverse=True)[:3]
-    for k, count in sorted_fails:
-        report += f"- {k}: {count} occurrences\n"
-        for ex in failures[k][:2]:
-            report += f"  Example: {json.dumps(ex)}\n"
+    # ---------- 2. training curve ----------
+    md.append("## 2. Training curve\n")
+    q_tr = [e for e in tr if e["agent"] == "qlearning"]
+    runs = sorted({e["run"] for e in q_tr})
+    if q_tr:
+        n_ep = max(e["episode"] for e in q_tr) + 1
+        bin_size = max(1, n_ep // 20)  # about 20 points on the curve
+        curves = []
+        for r in runs:
+            by_ep = {e["episode"]: e["success"] for e in q_tr if e["run"] == r}
+            curves.append([np.mean([by_ep[i] for i in range(b, min(b + bin_size, n_ep)) if i in by_ep])
+                           for b in range(0, n_ep, bin_size)])
+        arr = np.array(curves)
+        xs = [b + bin_size for b in range(0, n_ep, bin_size)]
+        fig, ax = plt.subplots(figsize=(6, 3.5))
+        ax.plot(xs, arr.mean(axis=0), color="#2b7a78", label=f"mean of {len(runs)} runs")
+        ax.fill_between(xs, arr.min(axis=0), arr.max(axis=0), alpha=0.25, color="#2b7a78", label="min to max")
+        ax.set_xlabel("training episode")
+        ax.set_ylabel(f"success rate (bins of {bin_size})")
+        ax.set_ylim(0, 1)
+        ax.legend()
+        ax.set_title("Q-learning training curve (exploring, popup_p=0.15)")
+        fig.tight_layout()
+        fig.savefig(os.path.join(a.charts, "training_curve.png"), dpi=120)
+        plt.close(fig)
+        m = arr.mean(axis=0)
+        md.append(f"{len(runs)} independent training runs with different seeds, {n_ep} episodes each, "
+                  f"success averaged over bins of {bin_size} episodes (training includes exploration).\n")
+        md.append(f"Mean success in the first bin: {pct(m[0])}; in the last bin: {pct(m[-1])} "
+                  f"(last bin range over runs: {pct(arr[:, -1].min())} to {pct(arr[:, -1].max())}).\n")
+        md.append("![training curve](charts/training_curve.png)\n")
 
-    # 4. Latency
-    times = [l.get("time_ms", 0) for l in logs if "time_ms" in l]
-    times.sort()
-    if times:
-        median = times[len(times)//2]
-        p95 = times[int(len(times)*0.95)]
-    else:
-        median = p95 = 0
-    report += f"\n## Latency\nMedian: {median}ms, 95th percentile: {p95}ms\n"
+    # ---------- 3. popup sweep ----------
+    md.append("## 3. Popup probability sweep (Q-learning agent)\n")
+    sweep = {}
+    for p in sorted({e["popup_p"] for e in ev if e["agent"] == "qlearning"}):
+        sub = [e for e in ev if e["agent"] == "qlearning" and e["popup_p"] == p]
+        k, n, rate, lo, hi = rate_row(sub)
+        sweep[p] = {"n": n, "rate": rate, "lo": lo, "hi": hi,
+                    "mean_steps": np.mean([e["steps"] for e in sub]),
+                    "mean_waits": np.mean([e["waits"] for e in sub]),
+                    "popup_share": np.mean([e["any_popup"] for e in sub]),
+                    "limit_share": np.mean([e["truncated"] and not e["order"] for e in sub]),
+                    "mean_popup_steps": np.mean([e["popup_steps"] for e in sub])}
+    md.append("| popup_p | attempts | success rate | 95% CI | mean steps | attempts that saw a popup | step-limit failures |\n|---|---|---|---|---|---|---|")
+    for p, s in sweep.items():
+        md.append(f"| {p} | {s['n']} | {pct(s['rate'])} | {pct(s['lo'])} to {pct(s['hi'])} | "
+                  f"{s['mean_steps']:.2f} | {pct(s['popup_share'])} | {pct(s['limit_share'])} |")
+    md.append("")
+    if len(sweep) >= 2:
+        ps = list(sweep)
+        lo_p, hi_p = ps[0], ps[-1]
+        s0, s1 = sweep[lo_p], sweep[hi_p]
+        change = s1["rate"] - s0["rate"]
+        overlap = not (s1["hi"] < s0["lo"] or s0["hi"] < s1["lo"])
+        word = "fell" if change < 0 else "rose" if change > 0 else "did not change"
+        steps_word = "rose" if s1["mean_steps"] > s0["mean_steps"] else "did not rise"
+        md.append(f"**Explanation (computed).** From popup_p={lo_p} to popup_p={hi_p} the success rate {word} "
+                  f"from {pct(s0['rate'])} to {pct(s1['rate'])}; the two confidence intervals "
+                  f"{'overlap, so the difference is not clearly more than noise' if overlap else 'do not overlap'}. "
+                  f"Mean steps per attempt {steps_word} from {s0['mean_steps']:.2f} to {s1['mean_steps']:.2f}"
+                  f"{', consistent with each popup costing at least one extra step to dismiss' if s1['mean_steps'] > s0['mean_steps'] else ''} "
+                  f"(attempts that saw a popup: {pct(s0['popup_share'])} then {pct(s1['popup_share'])}). "
+                  f"A failure only happens when these extra steps push the attempt past the 20 step limit "
+                  f"or when the agent acts wrongly while a popup is showing; step-limit failures went from "
+                  f"{pct(s0['limit_share'])} to {pct(s1['limit_share'])}.\n")
+        fig, ax = plt.subplots(figsize=(5, 3.5))
+        x = list(sweep)
+        y = [sweep[p]["rate"] for p in x]
+        err = [[sweep[p]["rate"] - sweep[p]["lo"] for p in x], [sweep[p]["hi"] - sweep[p]["rate"] for p in x]]
+        ax.errorbar(x, y, yerr=err, marker="o", capsize=5, color="#2b7a78")
+        ax.set_ylim(0, 1.05)
+        ax.set_xlabel("popup_p")
+        ax.set_ylabel("success rate")
+        ax.set_title("Q-learning success vs popup probability")
+        fig.tight_layout()
+        fig.savefig(os.path.join(a.charts, "popup_sweep.png"), dpi=120)
+        plt.close(fig)
+        md.append("![popup sweep](charts/popup_sweep.png)\n")
 
-    # 5. Surprise
-    report += "\n## One thing that surprised me\n"
-    if sorted_fails and sorted_fails[0][1] > 0:
-        report += f"The most common failure was {sorted_fails[0][0]}, which occurred {sorted_fails[0][1]} times. This suggests the agent struggles with that specific aspect of the environment.\n"
-    else:
-        report += "The agent achieved an unexpectedly high success rate across all conditions, showing robustness to the random delays.\n"
+    # ---------- 4. failures ----------
+    md.append("## 4. Top failure reasons of the Q-learning agent\n")
+    # all evaluation attempts of the learning agent, every popup_p; if it never failed, fall back
+    # to its training attempts (clearly labelled) so there is still something to study
+    pool, label = [e for e in ev if e["agent"] == "qlearning"], "evaluation"
+    fails = [e for e in pool if not e["success"]]
+    if not fails:
+        pool, label = [e for e in tr if e["agent"] == "qlearning"], "training (no evaluation failures)"
+        fails = [e for e in pool if not e["success"]]
+    md.append(f"{len(fails)} failed attempts out of {len(pool)} {label} attempts. "
+              "Reason is assigned by code from the last log line of each attempt.
+")
+    cats = Counter(failure_reason(e) for e in fails)
+    for reason, count in cats.most_common(3):
+        md.append(f"### {reason}: {count} attempts ({pct(count / max(1, len(fails)))} of failures)\n")
+        ex = [e for e in fails if failure_reason(e) == reason][:2]
+        for e in ex:
+            md.append("```json\n" + e["last_raw"] + "\n```")
+        md.append("")
+    if not fails:
+        md.append("No failed attempts in this log.\n")
 
-    with open("report.md", "w") as f:
-        f.write(report)
-        
-    # Chart 1: Training curve
-    plt.figure()
-    train_logs = [l for l in logs if l.get("phase") == "train" and l.get("agent") == "qlearning"]
-    if train_logs:
-        # Group by run_seed (derived from seed ranges)
-        runs = {}
-        for l in train_logs:
-            run_id = l["seed"] // 1000
-            ep = l["episode"]
-            if run_id not in runs: runs[run_id] = {}
-            if ep not in runs[run_id]: runs[run_id][ep] = []
-            runs[run_id][ep].append(l)
-            
-        run_curves = []
-        for run_id, eps in runs.items():
-            curve = []
-            for ep in sorted(eps.keys()):
-                reward = sum(x.get("reward", 0) for x in eps[ep] if x.get("done"))
-                curve.append(1 if reward > 0 else 0)
-            # smooth
-            smoothed = pd.Series(curve).rolling(20, min_periods=1).mean().values
-            run_curves.append(smoothed)
-            
-        if run_curves:
-            min_len = min(len(c) for c in run_curves)
-            curves = np.array([c[:min_len] for c in run_curves])
-            mean_curve = curves.mean(axis=0)
-            min_curve = curves.min(axis=0)
-            max_curve = curves.max(axis=0)
-            
-            x = np.arange(min_len)
-            plt.plot(x, mean_curve, label='Mean Success Rate')
-            plt.fill_between(x, min_curve, max_curve, alpha=0.3, label='Min/Max Band')
-            plt.legend()
-            plt.title("Q-learning Training Curve")
-            plt.savefig("train_curve.png")
-            plt.close()
+    # ---------- 5. latency ----------
+    md.append("## 5. Step latency\n")
+    t = np.array([s["time_ms"] for s in steps], dtype=float)
+    cdp = np.array([s["cdp_ms"] for s in steps], dtype=float)
+    settle = np.array([s["settle_ms"] for s in steps], dtype=float)
+    other = t - cdp - settle  # time outside CDP calls and settling: process pipe, python side of the pause, wait sleeps
+    md.append(f"All {len(steps)} steps: median {np.median(t):.0f} ms, p95 {np.percentile(t, 95):.0f} ms.\n")
+    md.append("| part | median ms | p95 ms | share of total time |\n|---|---|---|---|")
+    for name, arr in (("CDP calls", cdp), ("settle polling", settle), ("other (wait sleep, overhead)", other)):
+        md.append(f"| {name} | {np.median(arr):.0f} | {np.percentile(arr, 95):.0f} | {pct(arr.sum() / t.sum())} |")
+    md.append("")
+    kinds = {"click": [s for s in steps if s["action"].startswith("click")],
+             "wait": [s for s in steps if s["action"] == "wait"]}
+    md.append("| action | steps | median ms | p95 ms |\n|---|---|---|---|")
+    for k, v in kinds.items():
+        if v:
+            tt = np.array([s["time_ms"] for s in v])
+            md.append(f"| {k} | {len(v)} | {np.median(tt):.0f} | {np.percentile(tt, 95):.0f} |")
+    md.append("")
+    fig, ax = plt.subplots(figsize=(5, 3.5))
+    parts = [cdp.mean(), settle.mean(), other.mean()]
+    ax.bar(["CDP calls", "settle polling", "other"], parts, color=["#2b7a78", "#9aa5b1", "#d9a441"])
+    ax.set_ylabel("mean ms per step")
+    ax.set_title("Where step time goes")
+    fig.tight_layout()
+    fig.savefig(os.path.join(a.charts, "latency.png"), dpi=120)
+    plt.close(fig)
+    md.append("![latency](charts/latency.png)\n")
 
-    # Chart 2: Popup sweep
-    if sweep_results:
-        plt.figure()
-        p_vals = [str(x[0]) for x in sweep_results]
-        rates = [x[1] for x in sweep_results]
-        plt.bar(p_vals, rates)
-        plt.title("Success Rate vs Popup Probability")
-        plt.savefig("popup_sweep.png")
-        plt.close()
+    # ---------- 6. surprise (computed observations, to be rewritten by hand) ----------
+    md.append("## One thing that surprised me\n")
+    md.append("> Placeholder generated from the data by `scripts/analyze.py`. To be rewritten in my own words.\n")
+    q_ev = [e for e in ev if e["agent"] == "qlearning" and e["popup_p"] == DEFAULT_P]
+    r_ev = [e for e in ev if e["agent"] == "random" and e["popup_p"] == DEFAULT_P]
+    if q_ev:
+        wait_steps = [s for s in steps if s["action"] == "wait"]
+        wait_share_steps = len(wait_steps) / len(steps)
+        wait_share_time = sum(s["time_ms"] for s in wait_steps) / t.sum()
+        md.append(f"- Wait actions are {pct(wait_share_steps)} of all steps but {pct(wait_share_time)} of all step time.")
+        q_waits = np.mean([e["waits"] for e in q_ev])
+        md.append(f"- A trained Q-learning attempt uses {q_waits:.2f} wait actions on average.")
+    if q_ev and r_ev:
+        succ_q = [e["steps"] for e in q_ev if e["success"]]
+        succ_r = [e["steps"] for e in r_ev if e["success"]]
+        if succ_q:
+            md.append(f"- Successful Q-learning attempts took {np.mean(succ_q):.2f} steps on average"
+                      + (f"; successful random attempts took {np.mean(succ_r):.2f}." if succ_r else "; the random agent never succeeded."))
+        if r_ev:
+            r_wrong = Counter(failure_reason(e) for e in r_ev if not e["success"])
+            if r_wrong:
+                name, c = r_wrong.most_common(1)[0]
+                md.append(f"- The random agent's most common failure was `{name}` ({c} of {len(r_ev)} attempts).")
+    md.append("")
+
+    with open(a.report, "w") as f:
+        f.write("\n".join(md) + "\n")
+    print(f"wrote {a.report}")
+
 
 if __name__ == "__main__":
     main()

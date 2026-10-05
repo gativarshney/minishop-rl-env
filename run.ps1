@@ -1,13 +1,5 @@
+# Thin wrapper: all the work happens in scripts/run_all.py
 $ErrorActionPreference = "Stop"
-Write-Host "Building env..."
-cd env
-if (-not (Test-Path build)) { mkdir build }
-cd build
-cmake ..
-cmake --build . --config Release
-cd ../..
-Write-Host "Running RL task..."
-python scripts/run_all.py
-Write-Host "Analyzing..."
-python scripts/analyze.py
-Write-Host "Done!"
+Set-Location $PSScriptRoot
+python scripts/run_all.py @args
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

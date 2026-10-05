@@ -61,12 +61,23 @@ def run_episode(env, agent, goal, seed, popup_p, delay_p, meta, train, out):
     return success
 
 
+def safe_episode(holder, agent, *rest):
+    """If the env process or browser dies mid-attempt, restart it once and replay the attempt."""
+    try:
+        return run_episode(holder[0], agent, *rest)
+    except RuntimeError as e:
+        print(f"env problem ({e}), restarting environment", flush=True)
+        holder[0].close()
+        holder[0] = Env()
+        return run_episode(holder[0], agent, *rest)
+
+
 def job(args):
     """One independent worker: trains one Q agent, then evaluates it and the random baseline."""
     run, n_train, n_eval, popups = args
     os.makedirs(PART_DIR, exist_ok=True)
     out = open(os.path.join(PART_DIR, f"job{run}.jsonl"), "w")
-    env = Env()
+    holder = [Env()]  # list so safe_episode can swap in a fresh env
     try:
         # ----- training: popup/delay as in the task, goals cycle through all 12 in shuffled blocks
         agent = QAgent(seed=run)
@@ -78,7 +89,7 @@ def job(args):
                 order_rng.shuffle(order)
             goal = order.pop()
             meta = {"episode": ep, "run": run, "phase": "train"}
-            run_episode(env, agent, goal, 1000 * (run + 1) + ep, DEFAULT_POPUP, DELAY_P, meta, True, out)
+            safe_episode(holder, agent, goal, 1000 * (run + 1) + ep, DEFAULT_POPUP, DELAY_P, meta, True, out)
         # ----- evaluation: seeds >= 100000 never appear in training (training seeds are < 100000)
         for popup_p in popups:
             for who in (agent, RandomAgent(seed=10_000 + run)):
@@ -92,16 +103,16 @@ def job(args):
                     meta = {"episode": ep, "run": run, "phase": "eval"}
                     if who is agent:
                         agent.start_episode(goal[0], goal[1], ep, False)
-                    run_episode(env, who, goal, 100_000 + 1000 * run + ep, popup_p, DELAY_P, meta, None, out)
+                    safe_episode(holder, who, goal, 100_000 + 1000 * run + ep, popup_p, DELAY_P, meta, None, out)
     finally:
-        env.close()
+        holder[0].close()
         out.close()
     return run
 
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--train-episodes", type=int, default=400)
+    ap.add_argument("--train-episodes", type=int, default=300)
     ap.add_argument("--eval-per-run", type=int, default=70)  # 3 runs x 70 = 210 attempts per condition
     ap.add_argument("--runs", type=int, default=3)
     ap.add_argument("--skip-build", action="store_true")
