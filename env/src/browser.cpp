@@ -82,8 +82,8 @@ void Browser::launch(const std::string& start_url) {
     std::string bin = findChromeBinary();
     temp_dir_ = createTempDir();
     
-    std::string cmd = bin + " --headless=new --remote-debugging-port=0 --user-data-dir=" + temp_dir_ + 
-                      " --no-sandbox --disable-gpu --disable-dev-shm-usage --window-size=1000,800 " + start_url;
+    std::string cmd = "\"" + bin + "\" --headless=new --remote-debugging-port=0 --user-data-dir=\"" + temp_dir_ + "\" " +
+                      "--no-sandbox --disable-gpu --disable-dev-shm-usage --window-size=1000,800 \"" + start_url + "\"";
 
 #ifdef _WIN32
     STARTUPINFOA si;
@@ -92,8 +92,10 @@ void Browser::launch(const std::string& start_url) {
     si.cb = sizeof(si);
     ZeroMemory(&pi, sizeof(pi));
 
-    if (!CreateProcessA(NULL, (LPSTR)cmd.c_str(), NULL, NULL, FALSE, CREATE_SUSPENDED | CREATE_BREAKAWAY_FROM_JOB, NULL, NULL, &si, &pi)) {
-        throw std::runtime_error("Failed to start Chrome");
+    std::vector<char> cmd_buf(cmd.begin(), cmd.end());
+    cmd_buf.push_back('\0');
+    if (!CreateProcessA(NULL, cmd_buf.data(), NULL, NULL, FALSE, CREATE_SUSPENDED | CREATE_BREAKAWAY_FROM_JOB, NULL, NULL, &si, &pi)) {
+        throw std::runtime_error("Failed to start Chrome, error: " + std::to_string(GetLastError()));
     }
 
     job_handle_ = CreateJobObjectA(NULL, NULL);

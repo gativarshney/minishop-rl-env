@@ -1,23 +1,33 @@
 name: CI
-on: [push]
+on: [push, workflow_dispatch]
 jobs:
   build-and-test:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      CHROME_BIN: /usr/bin/google-chrome
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake chromium-browser python3-pip
-          pip3 install pandas numpy matplotlib
-      - name: Run end-to-end
+          sudo apt-get install -y cmake build-essential
+          pip install -r requirements.txt
+      - name: Check browser
+        run: $CHROME_BIN --version
+      - name: Run end to end
         run: |
           chmod +x run.sh
           ./run.sh
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v3
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
         with:
           name: results
           path: |
             logs/
             report.md
+            *.png

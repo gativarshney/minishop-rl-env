@@ -21,8 +21,9 @@ int main() {
                 int seed = req.value("seed", 42);
                 double popup_p = req.value("popup_p", 0.0);
                 double delay_p = req.value("delay_p", 0.0);
+                std::string html_path = req.value("html_path", "");
                 
-                json obs = env.reset(item, qty, seed, popup_p, delay_p);
+                json obs = env.reset(item, qty, seed, popup_p, delay_p, html_path);
                 json res = {
                     {"status", "ok"},
                     {"observation", obs}

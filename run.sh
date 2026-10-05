@@ -4,7 +4,7 @@ echo "Building env..."
 cd env
 mkdir -p build
 cd build
-cmake ..
+cmake -DCMAKE_BUILD_TYPE=Release ..
 cmake --build . --config Release
 cd ../..
 echo "Running RL task..."

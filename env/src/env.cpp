@@ -7,13 +7,15 @@
 MinishopEnv::MinishopEnv() {}
 MinishopEnv::~MinishopEnv() {}
 
-nlohmann::json MinishopEnv::reset(const std::string& item, int qty, int seed, double popup_p, double delay_p) {
+nlohmann::json MinishopEnv::reset(const std::string& item, int qty, int seed, double popup_p, double delay_p, const std::string& html_path) {
     steps_ = 0;
     current_goal_ = item + " x" + std::to_string(qty);
     
-    // Convert absolute path of site/index.html to file URL
-    auto path = std::filesystem::absolute("../site/index.html");
-    std::string url = "file:///" + path.string() + "?item=" + item + "&qty=" + std::to_string(qty) + 
+    std::string path_str = html_path;
+    for (char& c : path_str) { if (c == '\\') c = '/'; }
+    if (path_str.length() > 0 && path_str[0] != '/') path_str = "/" + path_str;
+    
+    std::string url = "file://" + path_str + "?item=" + item + "&qty=" + std::to_string(qty) + 
                       "&seed=" + std::to_string(seed) + "&popup_p=" + std::to_string(popup_p) + 
                       "&delay_p=" + std::to_string(delay_p);
     

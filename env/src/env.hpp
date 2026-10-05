@@ -19,7 +19,7 @@ public:
     MinishopEnv();
     ~MinishopEnv();
 
-    nlohmann::json reset(const std::string& item, int qty, int seed, double popup_p, double delay_p);
+    nlohmann::json reset(const std::string& item, int qty, int seed, double popup_p, double delay_p, const std::string& html_path);
     StepResult step(int action_i, const std::string& action_type); // action_type: "click" or "wait"
 
 private:
