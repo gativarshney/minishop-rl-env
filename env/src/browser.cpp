@@ -2,6 +2,7 @@
 #include <iostream>
 #include <fstream>
 #include <thread>
+#include <ixwebsocket/IXNetSystem.h>
 #include <chrono>
 #include <filesystem>
 #include <stdexcept>

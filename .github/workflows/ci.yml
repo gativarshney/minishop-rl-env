@@ -1,0 +1,23 @@
+name: CI
+on: [push]
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake chromium-browser python3-pip
+          pip3 install pandas numpy matplotlib
+      - name: Run end-to-end
+        run: |
+          chmod +x run.sh
+          ./run.sh
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: results
+          path: |
+            logs/
+            report.md
