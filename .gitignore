@@ -1,0 +1,24 @@
+# .gitignore
+build/
+build_out/
+CMakeCache.txt
+CMakeFiles/
+*.dir/
+*.ilk
+*.pdb
+*.obj
+*.exe
+*.dll
+*.lib
+*.exp
+out/
+logs/
+.vs/
+.vscode/
+tmp/
+venv/
+__pycache__/
+*.pyc
+NOTES_FOR_GATI.md
+chrome_profile/
+env_profile/
