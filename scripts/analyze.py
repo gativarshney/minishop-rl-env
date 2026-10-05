@@ -230,8 +230,7 @@ def main():
         pool, label = [e for e in tr if e["agent"] == "qlearning"], "training (no evaluation failures)"
         fails = [e for e in pool if not e["success"]]
     md.append(f"{len(fails)} failed attempts out of {len(pool)} {label} attempts. "
-              "Reason is assigned by code from the last log line of each attempt.
-")
+              "Reason is assigned by code from the last log line of each attempt.\n")
     cats = Counter(failure_reason(e) for e in fails)
     for reason, count in cats.most_common(3):
         md.append(f"### {reason}: {count} attempts ({pct(count / max(1, len(fails)))} of failures)\n")
