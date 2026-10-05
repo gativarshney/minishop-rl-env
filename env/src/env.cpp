@@ -34,7 +34,8 @@ json MinishopEnv::observe() {
                 const el = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
                 clickable = (el === b || b.contains(el));
             }
-            buttons.push({i: i, text: b.innerText, data_id: b.dataset.id || '', clickable: clickable});
+            // textContent, because innerText is empty for hidden (delayed) buttons
+            buttons.push({i: i, text: b.textContent.trim(), data_id: b.dataset.id || '', clickable: clickable});
         });
         const s = window.__state;
         return {screen: s.screen.replace('-screen', ''), popup_showing: popup, buttons: buttons,
