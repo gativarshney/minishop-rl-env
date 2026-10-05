@@ -58,10 +58,33 @@
         </div>
     </div>
 
+    <div id="cart-screen" class="screen">
+        <h1>Cart</h1>
+        <p>Item: <span id="cart-item-name">None</span></p>
+        <p>Quantity: <span id="cart-qty">0</span></p>
+        <div class="controls">
+            <button onclick="checkout()">Checkout</button>
+            <button onclick="clearCart()">Clear cart</button>
+            <button onclick="showScreen('catalog-screen')">Back</button>
+        </div>
+    </div>
+
+    <div id="done-screen" class="screen">
+        <h1>Order placed</h1>
+        <p>Item: <span id="done-item-name"></span></p>
+        <p>Quantity: <span id="done-qty"></span></p>
+    </div>
+
     <script>
         let currentProduct = null;
         let currentProductName = '';
         let quantity = 1;
+        let cartItem = null;
+        let cartQty = 0;
+
+        const urlParams = new URLSearchParams(window.location.search);
+        const goalItem = urlParams.get('item');
+        const goalQty = parseInt(urlParams.get('qty'));
 
         function showScreen(id) {
             document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
@@ -85,8 +108,29 @@
         }
 
         function addToCart() {
-            // Cart functionality will be implemented in the next step
-            console.log("Added to cart: " + currentProduct + " x" + quantity);
+            cartItem = currentProduct;
+            cartQty = quantity;
+            document.getElementById('cart-item-name').innerText = currentProductName;
+            document.getElementById('cart-qty').innerText = cartQty;
+            showScreen('cart-screen');
+        }
+
+        function clearCart() {
+            cartItem = null;
+            cartQty = 0;
+            document.getElementById('cart-item-name').innerText = 'None';
+            document.getElementById('cart-qty').innerText = '0';
+        }
+
+        function checkout() {
+            document.getElementById('done-item-name').innerText = document.getElementById('cart-item-name').innerText;
+            document.getElementById('done-qty').innerText = cartQty;
+            showScreen('done-screen');
+            
+            // Expose success truth in DOM for the environment to read
+            const success = (cartItem === goalItem && cartQty === goalQty);
+            window.__orderResult = { success: success, item: cartItem, qty: cartQty };
+            document.getElementById('done-screen').dataset.success = success;
         }
     </script>
 </body>
