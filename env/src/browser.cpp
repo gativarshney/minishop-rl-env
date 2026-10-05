@@ -94,8 +94,8 @@ void Browser::launch(const std::string& start_url) {
 
     std::vector<char> cmd_buf(cmd.begin(), cmd.end());
     cmd_buf.push_back('\0');
-    if (!CreateProcessA(bin.c_str(), cmd_buf.data(), NULL, NULL, FALSE, CREATE_SUSPENDED | CREATE_BREAKAWAY_FROM_JOB, NULL, NULL, &si, &pi)) {
-        throw std::runtime_error("Failed to start Chrome, error: " + std::to_string(GetLastError()));
+    if (!CreateProcessA(NULL, cmd_buf.data(), NULL, NULL, FALSE, CREATE_SUSPENDED, NULL, NULL, &si, &pi)) {
+        throw std::runtime_error("Failed to start Chrome, error: " + std::to_string(GetLastError()) + ", cmd: " + cmd);
     }
 
     job_handle_ = CreateJobObjectA(NULL, NULL);
@@ -103,7 +103,11 @@ void Browser::launch(const std::string& start_url) {
         JOBOBJECT_EXTENDED_LIMIT_INFORMATION jeli = { 0 };
         jeli.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
         SetInformationJobObject(job_handle_, JobObjectExtendedLimitInformation, &jeli, sizeof(jeli));
-        AssignProcessToJobObject(job_handle_, pi.hProcess);
+        if (!AssignProcessToJobObject(job_handle_, pi.hProcess)) {
+            // Failed to assign (e.g. nested job), continue anyway
+            CloseHandle(job_handle_);
+            job_handle_ = nullptr;
+        }
     }
     ResumeThread(pi.hThread);
     process_handle_ = pi.hProcess;
