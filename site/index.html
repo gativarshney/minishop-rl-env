@@ -115,7 +115,9 @@
         const urlParams = new URLSearchParams(window.location.search);
         const goalItem = urlParams.get('item');
         const goalQty = parseInt(urlParams.get('qty'));
-        const seed = parseInt(urlParams.get('seed')) || 42;
+        // seed 0 is a valid seed, so only fall back when the value is missing
+        const seedParsed = parseInt(urlParams.get('seed'));
+        const seed = isNaN(seedParsed) ? 42 : seedParsed;
         const popupP = parseFloat(urlParams.get('popup_p')) || 0;
         const delayP = parseFloat(urlParams.get('delay_p')) || 0;
 
@@ -126,14 +128,33 @@
         let quantity = 1;
         let cartItem = null;
         let cartQty = 0;
+        let currentScreen = 'catalog-screen';
+        let delayPending = false;
+        let delayTimer = null;
+
+        // Read-only view of the page state, so the environment and tests can
+        // check the truth without parsing the DOM text.
+        window.__state = {
+            get screen() { return currentScreen; },
+            get qty() { return quantity; },
+            get cartItem() { return cartItem; },
+            get cartQty() { return cartQty; },
+            get delayPending() { return delayPending; },
+            get popupShowing() { return document.getElementById('popup-overlay').style.display === 'block'; }
+        };
+        window.__orderResult = null;
 
         function showScreen(id) {
+            // a new screen cancels the previous screen's reveal timer
+            clearTimeout(delayTimer);
+            delayPending = false;
             document.querySelectorAll('.screen').forEach(s => {
                 s.classList.remove('active');
                 s.classList.remove('buttons-hidden');
             });
             const screen = document.getElementById(id);
             screen.classList.add('active');
+            currentScreen = id;
 
             // Draw for popup
             if (prng() < popupP) {
@@ -145,8 +166,10 @@
                 screen.classList.add('buttons-hidden');
                 // Draw length of delay (50 to 300 ms)
                 const delayMs = 50 + prng() * 250;
-                setTimeout(() => {
+                delayPending = true;
+                delayTimer = setTimeout(() => {
                     screen.classList.remove('buttons-hidden');
+                    delayPending = false;
                 }, delayMs);
             } else {
                 // Keep PRNG state aligned even if delay does not happen: draw a dummy number
