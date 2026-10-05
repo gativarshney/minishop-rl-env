@@ -1,21 +1,17 @@
-import json
+"""Baseline: picks uniformly among every clickable button plus wait."""
 import random
-import sys
+
 
 class RandomAgent:
-    def __init__(self, action_space_fn=None):
-        self.action_space_fn = action_space_fn
+    name = "random"
 
-    def get_action(self, obs):
-        buttons = obs.get("buttons", [])
-        clickable_buttons = [b for b in buttons if b.get("clickable", False)]
-        
-        # We can either click a random button, or wait
-        actions = []
-        for b in clickable_buttons:
-            actions.append({"type": "click", "i": b["i"]})
-        actions.append({"type": "wait", "i": -1})
-        
-        # Exact choice documented here: Randomly pick from clickable buttons or wait.
-        action = random.choice(actions)
-        return action
+    def __init__(self, seed):
+        self.rng = random.Random(seed)  # seeded so runs are reproducible
+
+    def act(self, obs, info):
+        options = [("click", b["i"]) for b in obs["buttons"] if b["clickable"]]
+        options.append(("wait", None))
+        return self.rng.choice(options)
+
+    def learn(self, *args, **kwargs):
+        pass  # the baseline never learns

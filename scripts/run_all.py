@@ -1,113 +1,129 @@
-import subprocess
+"""Build, train, evaluate, sweep and analyze. Every result comes from running the real environment."""
+import argparse
+import glob
 import json
+import multiprocessing as mp
 import os
+import random
+import shutil
+import subprocess
 import sys
+import time
 
-# Hack to load agents
-sys.path.append(os.path.abspath("agents"))
-from random_agent import RandomAgent
-from qlearning_agent import QLearningAgent
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, ROOT)
+sys.path.insert(0, os.path.join(ROOT, "scripts"))
+from agents.qlearning_agent import QAgent  # noqa: E402
+from agents.random_agent import RandomAgent  # noqa: E402
+from env_client import Env  # noqa: E402
+
+ITEMS = ["blue-mug", "red-lamp", "green-book", "black-pen"]
+GOALS = [(item, qty) for item in ITEMS for qty in (1, 2, 3)]  # the 12 goals
+DEFAULT_POPUP, DELAY_P = 0.15, 0.10
+SWEEP_POPUPS = [0.0, 0.15, 0.4]
+LOG_DIR = os.path.join(ROOT, "logs")
+PART_DIR = os.path.join(LOG_DIR, "parts")
+
+
+def build():
+    env_dir = os.path.join(ROOT, "env")
+    subprocess.check_call(["cmake", "-S", env_dir, "-B", os.path.join(env_dir, "build"), "-DCMAKE_BUILD_TYPE=Release"])
+    subprocess.check_call(["cmake", "--build", os.path.join(env_dir, "build"), "--config", "Release"])
+
+
+def run_episode(env, agent, goal, seed, popup_p, delay_p, meta, train, out):
+    """Plays one attempt, writes one JSON line per step, returns True if the order was correct."""
+    item, qty = goal
+    obs, info = env.reset(item, qty, seed, popup_p, delay_p)
+    if train is not None:
+        agent.start_episode(item, qty, meta["episode"], train)
+    success = False
+    for step in range(1, 21):
+        action = agent.act(obs, info)
+        key = getattr(agent, "last_key", action[0])
+        res = env.step(action)
+        done, trunc = res["done"], res["truncated"]
+        rec = {"episode": meta["episode"], "run": meta["run"], "seed": seed, "goal": f"{item} x{qty}",
+               "step": step, "observation": obs,
+               "action": f"click({action[1]})" if action[0] == "click" else "wait",
+               "action_key": key, "reward": res["reward"], "done": done, "truncated": trunc,
+               "time_ms": res["time_ms"], "cdp_ms": res["cdp_ms"], "settle_ms": res["settle_ms"],
+               "popup_showing": obs["popup_showing"], "agent": agent.name, "phase": meta["phase"],
+               "popup_p": popup_p, "delay_p": delay_p, "info": res["info"]}
+        out.write(json.dumps(rec) + "\n")
+        errored = "error" in res["info"]
+        if meta["phase"] == "train" and not errored:
+            agent.learn(obs, info, key, res["reward"], res["observation"], res["info"], done)
+        success = bool(res["info"].get("order", {}).get("success", False))
+        obs, info = res["observation"], res["info"]
+        if done or trunc:
+            break
+    return success
+
+
+def job(args):
+    """One independent worker: trains one Q agent, then evaluates it and the random baseline."""
+    run, n_train, n_eval, popups = args
+    os.makedirs(PART_DIR, exist_ok=True)
+    out = open(os.path.join(PART_DIR, f"job{run}.jsonl"), "w")
+    env = Env()
+    try:
+        # ----- training: popup/delay as in the task, goals cycle through all 12 in shuffled blocks
+        agent = QAgent(seed=run)
+        order_rng = random.Random(run)
+        order = []
+        for ep in range(n_train):
+            if not order:
+                order = GOALS[:]
+                order_rng.shuffle(order)
+            goal = order.pop()
+            meta = {"episode": ep, "run": run, "phase": "train"}
+            run_episode(env, agent, goal, 1000 * (run + 1) + ep, DEFAULT_POPUP, DELAY_P, meta, True, out)
+        # ----- evaluation: seeds >= 100000 never appear in training (training seeds are < 100000)
+        for popup_p in popups:
+            for who in (agent, RandomAgent(seed=10_000 + run)):
+                if who is agent and popup_p not in SWEEP_POPUPS:
+                    continue
+                if who is not agent and popup_p != DEFAULT_POPUP:
+                    continue  # random baseline only needs the default setting
+                for ep in range(n_eval):
+                    # same seeds and goals for both agents so the comparison is paired
+                    goal = GOALS[ep % 12]
+                    meta = {"episode": ep, "run": run, "phase": "eval"}
+                    if who is agent:
+                        agent.start_episode(goal[0], goal[1], ep, False)
+                    run_episode(env, who, goal, 100_000 + 1000 * run + ep, popup_p, DELAY_P, meta, None, out)
+    finally:
+        env.close()
+        out.close()
+    return run
+
 
 def main():
-    if sys.platform == "win32":
-        env_bin = os.path.join("env", "build", "Release", "minishop_env.exe")
-    else:
-        env_bin = os.path.join("env", "build", "minishop_env")
-        
-    if not os.path.exists(env_bin):
-        print(f"Error: {env_bin} not found. Please build first.")
-        sys.exit(1)
-        
-    print("Starting env process...")
-    try:
-        proc = subprocess.Popen([env_bin], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
-    except Exception as e:
-        print(f"Failed to start {env_bin}: {e}")
-        sys.exit(1)
-    
-    logs = []
-    html_path = os.path.abspath(os.path.join("site", "index.html"))
-    
-    episodes_per_agent = 200
-    
-    # Train QLearning agent (3 seeds, 144 episodes each = 432)
-    # Then Eval QLearning at popup 0, 0.15, 0.4
-    # Then Eval Random at popup 0.15
-    
-    # Run loop function
-    def run_episodes(agent_name, agent, num_episodes, phase, popup_p, seed_offset, do_update=False):
-        for ep in range(num_episodes):
-            items = ["blue-mug", "red-lamp", "green-book", "black-pen"]
-            item = items[ep % 4]
-            qty = (ep % 3) + 1
-            seed = seed_offset + ep
-            
-            req = {"cmd": "reset", "item": item, "qty": qty, "seed": seed, "popup_p": popup_p, "delay_p": 0.1, "html_path": html_path}
-            proc.stdin.write(json.dumps(req) + "\n")
-            proc.stdin.flush()
-            
-            res_str = proc.stdout.readline()
-            if not res_str: break
-            res = json.loads(res_str)
-            if "observation" not in res:
-                print(f"Error from env: {res}")
-                break
-            obs = res["observation"]
-            info = {"current_qty": 1, "cart_item": "None"}
-            
-            step_idx = 0
-            done = False
-            while not done and step_idx < 20:
-                if agent_name == "random":
-                    action = agent.get_action(obs)
-                else:
-                    action = agent.get_action(obs, info, eval_mode=not do_update)
-                    
-                req = {"cmd": "step", "action_i": action["i"], "action_type": action["type"]}
-                proc.stdin.write(json.dumps(req) + "\n")
-                proc.stdin.flush()
-                
-                res = json.loads(proc.stdout.readline())
-                next_obs = res["observation"]
-                done = res["done"]
-                next_info = res.get("info", {"current_qty": 1, "cart_item": "None"})
-                
-                logs.append(json.dumps({
-                    "episode": ep, "seed": seed, "goal": f"{item} x{qty}", "step": step_idx,
-                    "observation": obs, "phase": phase, "popup_p": popup_p, "delay_p": 0.1,
-                    "action": action.get("name", "wait") if "name" in action else action["type"],
-                    "reward": res["reward"], "done": done, "truncated": res["truncated"],
-                    "time_ms": res["time_ms"], "popup_showing": res["popup_showing"], "agent": agent_name
-                }))
-                
-                if do_update:
-                    agent.update(obs, info, action, res["reward"], next_obs, next_info, done)
-                    
-                obs = next_obs
-                info = next_info
-                step_idx += 1
-            if do_update and hasattr(agent, "decay_epsilon"):
-                agent.decay_epsilon()
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--train-episodes", type=int, default=400)
+    ap.add_argument("--eval-per-run", type=int, default=70)  # 3 runs x 70 = 210 attempts per condition
+    ap.add_argument("--runs", type=int, default=3)
+    ap.add_argument("--skip-build", action="store_true")
+    ap.add_argument("--out", default=os.path.join(LOG_DIR, "run.jsonl"))
+    a = ap.parse_args()
+    t0 = time.time()
+    if not a.skip_build:
+        build()
+    shutil.rmtree(PART_DIR, ignore_errors=True)
+    jobs = [(r, a.train_episodes, a.eval_per_run, SWEEP_POPUPS) for r in range(a.runs)]
+    with mp.Pool(a.runs) as pool:  # runs are independent, so they use separate browsers in parallel
+        pool.map(job, jobs)
+    os.makedirs(os.path.dirname(a.out), exist_ok=True)
+    with open(a.out, "w") as merged:
+        for part in sorted(glob.glob(os.path.join(PART_DIR, "job*.jsonl"))):
+            with open(part) as f:
+                shutil.copyfileobj(f, merged)
+    shutil.rmtree(PART_DIR, ignore_errors=True)
+    print(f"logs written to {a.out} in {time.time() - t0:.0f}s (including build)")
+    subprocess.check_call([sys.executable, os.path.join(ROOT, "scripts", "analyze.py"), "--log", a.out])
+    print(f"total {time.time() - t0:.0f}s")
 
-    for run_seed in range(3):
-        agent = QLearningAgent(seed=run_seed)
-        run_episodes("qlearning", agent, 144, "train", 0.15, run_seed*1000, do_update=True)
-        # eval on 3 sweeps for this seed
-        run_episodes("qlearning", agent, 200, "eval", 0.0, run_seed*1000 + 2000, do_update=False)
-        run_episodes("qlearning", agent, 200, "eval", 0.15, run_seed*1000 + 3000, do_update=False)
-        run_episodes("qlearning", agent, 200, "eval", 0.4, run_seed*1000 + 4000, do_update=False)
 
-    random_agent = RandomAgent()
-    run_episodes("random", random_agent, 200, "eval", 0.15, 10000, do_update=False)
-                
-    proc.stdin.write(json.dumps({"cmd": "close"}) + "\n")
-    proc.stdin.flush()
-    proc.wait()
-    
-    os.makedirs("logs", exist_ok=True)
-    with open("logs/run.jsonl", "w") as f:
-        for l in logs:
-            f.write(l + "\n")
-            
 if __name__ == "__main__":
     main()

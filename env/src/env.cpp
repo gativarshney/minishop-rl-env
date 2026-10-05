@@ -144,7 +144,8 @@ StepResult MinishopEnv::step(const std::string& action_type, int action_i) {
                 realClick(pos["x"].get<double>(), pos["y"].get<double>());
             }
         } else if (action_type == "wait") {
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            // short pause; a delayed button (50 to 300 ms) needs one to a few waits
+            std::this_thread::sleep_for(std::chrono::milliseconds(60));
         } else {
             info["invalid_action"] = "unknown action type";
         }
