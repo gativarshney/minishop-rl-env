@@ -37,12 +37,40 @@ def main():
     episodes_per_agent = 200
     
     for agent_name, agent in agents:
+        # Train Q-Learning agent
+        if agent_name == "qlearning":
+            for train_ep in range(300):
+                item = ["blue-mug", "red-lamp", "green-book", "black-pen"][train_ep % 4]
+                qty = (train_ep % 3) + 1
+                req = {"cmd": "reset", "item": item, "qty": qty, "seed": train_ep, "popup_p": 0.15, "delay_p": 0.1, "html_path": html_path}
+                proc.stdin.write(json.dumps(req) + "\n")
+                proc.stdin.flush()
+                res = json.loads(proc.stdout.readline())
+                if "observation" not in res: continue
+                obs = res["observation"]
+                info = {"current_qty": 1, "cart_item": "None"}
+                done = False
+                step_idx = 0
+                while not done and step_idx < 20:
+                    action = agent.get_action(obs, info, eval_mode=False)
+                    req = {"cmd": "step", "action_i": action["i"], "action_type": action["type"]}
+                    proc.stdin.write(json.dumps(req) + "\n")
+                    proc.stdin.flush()
+                    res = json.loads(proc.stdout.readline())
+                    next_obs = res["observation"]
+                    done = res["done"]
+                    info = res.get("info", {"current_qty": 1, "cart_item": "None"})
+                    agent.update(obs, info, action, res["reward"], next_obs, info, done)
+                    obs = next_obs
+                    step_idx += 1
+                agent.decay_epsilon()
+                
+        # Eval
         for ep in range(episodes_per_agent):
-            # 4 items x 3 quantities
             items = ["blue-mug", "red-lamp", "green-book", "black-pen"]
             item = items[ep % 4]
             qty = (ep % 3) + 1
-            seed = 42 + ep
+            seed = 1000 + ep
             
             req = {"cmd": "reset", "item": item, "qty": qty, "seed": seed, "popup_p": 0.15, "delay_p": 0.1, "html_path": html_path}
             proc.stdin.write(json.dumps(req) + "\n")
@@ -81,9 +109,6 @@ def main():
                     "time_ms": res["time_ms"], "popup_showing": res["popup_showing"], "agent": agent_name
                 }))
                 
-                if agent_name == "qlearning":
-                    agent.update(obs, info, action, res["reward"], next_obs, info, done)
-                    
                 obs = next_obs
                 step_idx += 1
                 

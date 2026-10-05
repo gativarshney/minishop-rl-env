@@ -94,7 +94,7 @@ void Browser::launch(const std::string& start_url) {
 
     std::vector<char> cmd_buf(cmd.begin(), cmd.end());
     cmd_buf.push_back('\0');
-    if (!CreateProcessA(NULL, cmd_buf.data(), NULL, NULL, FALSE, CREATE_SUSPENDED | CREATE_BREAKAWAY_FROM_JOB, NULL, NULL, &si, &pi)) {
+    if (!CreateProcessA(bin.c_str(), cmd_buf.data(), NULL, NULL, FALSE, CREATE_SUSPENDED | CREATE_BREAKAWAY_FROM_JOB, NULL, NULL, &si, &pi)) {
         throw std::runtime_error("Failed to start Chrome, error: " + std::to_string(GetLastError()));
     }
 
