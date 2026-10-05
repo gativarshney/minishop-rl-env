@@ -8,7 +8,7 @@ cmake ..
 cmake --build . --config Release
 cd ../..
 echo "Running RL task..."
-python scripts/run_all.py
+python3 scripts/run_all.py
 echo "Analyzing..."
-python scripts/analyze.py
+python3 scripts/analyze.py
 echo "Done!"

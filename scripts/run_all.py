@@ -4,7 +4,11 @@ import os
 import sys
 
 def main():
-    env_bin = os.path.join("env", "build", "Release", "minishop_env.exe")
+    if sys.platform == "win32":
+        env_bin = os.path.join("env", "build", "Release", "minishop_env.exe")
+    else:
+        env_bin = os.path.join("env", "build", "minishop_env")
+        
     if not os.path.exists(env_bin):
         print(f"Error: {env_bin} not found. Please build first.")
         sys.exit(1)
