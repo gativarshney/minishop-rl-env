@@ -1,0 +1,1 @@
+﻿# minishop-rl-env
