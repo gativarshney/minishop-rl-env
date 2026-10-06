@@ -21,13 +21,18 @@ jobs:
       - name: Build environment
         timeout-minutes: 8
         run: python3 scripts/run_all.py --build-only
-      - name: Diagnose page modes
+      - name: Diagnose flaky click
         continue-on-error: true
-        timeout-minutes: 5
+        timeout-minutes: 6
         run: |
-          for m in initial tab window; do
-            MINISHOP_PAGE_MODE=$m bash scripts/ci_step.sh python3 scripts/test_env.py
-            echo "::notice::page mode $m exit code $?"
+          for i in 1 2 3 4 5 6; do
+            rm -f chrome.log
+            MINISHOP_CHROME_LOG=chrome.log bash scripts/ci_step.sh python3 scripts/test_env.py
+            code=$?
+            echo "::notice::run $i exit code $code"
+            if [ $code -ne 0 ]; then
+              echo "::error::chrome log run $i: $(grep -v -E 'dbus|DBus|gpu|GPU|vaapi|ALSA' chrome.log | tail -c 700 | tr -s '[:space:]' ' ')"
+            fi
           done
       - name: Smoke test (one purchase)
         timeout-minutes: 3

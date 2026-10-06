@@ -77,7 +77,7 @@ void Browser::launch() {
         "--user-data-dir=" + temp_dir_,
         "--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage",
         "--no-first-run", "--no-default-browser-check",
-        "--window-size=1000,800", "about:blank"};
+        "--window-size=1000,800", "--enable-logging=stderr", "about:blank"};
 
 #ifdef _WIN32
     // Build one command line; every argument is quoted so paths with spaces survive.
@@ -124,7 +124,10 @@ void Browser::launch() {
         int devnull = open("/dev/null", O_RDWR);
         dup2(devnull, 0);
         dup2(devnull, 1);  // stdout is our JSON channel, Chrome must not write to it
-        dup2(devnull, 2);
+        // MINISHOP_CHROME_LOG: keep Chrome's own messages in a file, for diagnosing crashes
+        const char* log_path = std::getenv("MINISHOP_CHROME_LOG");
+        int err_fd = log_path ? open(log_path, O_WRONLY | O_CREAT | O_APPEND, 0644) : -1;
+        dup2(err_fd >= 0 ? err_fd : devnull, 2);
         std::vector<char*> argv;
         for (auto& a : args) argv.push_back(const_cast<char*>(a.c_str()));
         argv.push_back(nullptr);
