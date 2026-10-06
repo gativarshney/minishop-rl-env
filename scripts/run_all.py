@@ -116,6 +116,7 @@ def main():
     ap.add_argument("--eval-per-run", type=int, default=70)  # 3 runs x 70 = 210 attempts per condition
     ap.add_argument("--runs", type=int, default=3)
     ap.add_argument("--skip-build", action="store_true")
+    ap.add_argument("--skip-bench", action="store_true", help="skip the parallel environments benchmark")
     ap.add_argument("--out", default=os.path.join(LOG_DIR, "run.jsonl"))
     a = ap.parse_args()
     t0 = time.time()
@@ -132,6 +133,12 @@ def main():
                 shutil.copyfileobj(f, merged)
     shutil.rmtree(PART_DIR, ignore_errors=True)
     print(f"logs written to {a.out} in {time.time() - t0:.0f}s (including build)")
+    bench_log = os.path.join(os.path.dirname(a.out), "parallel.jsonl")
+    if a.skip_bench:
+        if os.path.exists(bench_log):
+            os.remove(bench_log)  # never report an old benchmark next to a new run
+    else:
+        subprocess.check_call([sys.executable, os.path.join(ROOT, "scripts", "parallel_bench.py"), "--out", bench_log])
     subprocess.check_call([sys.executable, os.path.join(ROOT, "scripts", "analyze.py"), "--log", a.out])
     print(f"total {time.time() - t0:.0f}s")
 

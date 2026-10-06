@@ -93,6 +93,7 @@ def rate_row(eps):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--log", default=os.path.join(ROOT, "logs", "run.jsonl"))
+    ap.add_argument("--parallel", default=None, help="parallel benchmark log (default: parallel.jsonl next to the log)")
     ap.add_argument("--report", default=os.path.join(ROOT, "report.md"))
     ap.add_argument("--charts", default=os.path.join(ROOT, "charts"))
     a = ap.parse_args()
@@ -294,6 +295,37 @@ def main():
                 name, c = r_wrong.most_common(1)[0]
                 md.append(f"- The random agent's most common failure was `{name}` ({c} of {len(r_ev)} attempts).")
     md.append("")
+
+    # ---------- 7. extra: parallel environments on one browser ----------
+    par_path = a.parallel or os.path.join(os.path.dirname(a.log), "parallel.jsonl")
+    if os.path.exists(par_path):
+        md.append("## Extra: several environments on one Chrome\n")
+        with open(par_path) as f:
+            par = [json.loads(l) for l in f if l.strip()]
+        base = next((r for r in par if r["n_envs"] == 1), par[0])
+        md.append("Same random-agent attempts (same seeds and goals) played by N environments at once, "
+                  "each in its own browser window of one Chrome process. Wall time covers only the attempts.\n")
+        md.append("| environments | attempts | steps | wall seconds | steps per second | speedup vs 1 | successes |\n|---|---|---|---|---|---|---|")
+        for r in par:
+            md.append(f"| {r['n_envs']} | {r['episodes']} | {r['steps']} | {r['wall_s']:.1f} | "
+                      f"{r['steps'] / r['wall_s']:.1f} | {base['wall_s'] / r['wall_s']:.2f}x | {r['successes']} |")
+        md.append("")
+        same = len({(r["steps"], r["successes"]) for r in par}) == 1
+        best = max(par, key=lambda r: base["wall_s"] / r["wall_s"])
+        md.append(f"Best speedup: {base['wall_s'] / best['wall_s']:.2f}x with {best['n_envs']} environments. "
+                  f"Total steps and successes were {'identical' if same else 'not identical'} for every N "
+                  f"({'the results do not depend on how many run at once' if same else 'timing changed some attempts'}).\n")
+        fig, ax = plt.subplots(figsize=(5, 3.5))
+        ax.plot([r["n_envs"] for r in par], [base["wall_s"] / r["wall_s"] for r in par], marker="o", color="#2b7a78", label="measured")
+        ax.plot([r["n_envs"] for r in par], [r["n_envs"] for r in par], linestyle="--", color="#9aa5b1", label="ideal")
+        ax.set_xlabel("environments on one Chrome")
+        ax.set_ylabel("speedup")
+        ax.legend()
+        ax.set_title("Parallel environments")
+        fig.tight_layout()
+        fig.savefig(os.path.join(a.charts, "parallel_speedup.png"), dpi=120)
+        plt.close(fig)
+        md.append("![parallel speedup](charts/parallel_speedup.png)\n")
 
     with open(a.report, "w") as f:
         f.write("\n".join(md) + "\n")
