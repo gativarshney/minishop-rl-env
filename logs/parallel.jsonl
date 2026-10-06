@@ -1,4 +1,4 @@
-{"n_envs": 1, "episodes": 48, "steps": 652, "successes": 3, "wall_s": 40.542}
-{"n_envs": 2, "episodes": 48, "steps": 652, "successes": 3, "wall_s": 23.246}
-{"n_envs": 4, "episodes": 48, "steps": 652, "successes": 3, "wall_s": 12.36}
-{"n_envs": 8, "episodes": 48, "steps": 651, "successes": 3, "wall_s": 8.827}
+{"n_envs": 1, "episodes": 48, "steps": 652, "successes": 3, "wall_s": 48.146}
+{"n_envs": 2, "episodes": 48, "steps": 649, "successes": 3, "wall_s": 32.38}
+{"n_envs": 4, "episodes": 48, "steps": 651, "successes": 4, "wall_s": 24.855}
+{"n_envs": 8, "episodes": 48, "steps": 645, "successes": 3, "wall_s": 12.655}

@@ -29,8 +29,8 @@ Training attempts use seeds below 100000, evaluation attempts seeds from 100000.
 ## Results (from the committed run, see `report.md` for everything)
 - Random agent: 6 of 210 succeeded (2.9%, CI 1.3% to 6.1%).
 - Q-learning agent: 210 of 210 succeeded (100%, CI 98.2% to 100%), also at popup_p 0 and 0.4.
-- With more popups the agent needs more steps (4.29 at popup_p 0, 5.07 at 0.4) but still stays under the 20 step limit.
-- The full pipeline took about 6.5 minutes on the Windows laptop.
+- With more popups the agent needs more steps (4.32 at popup_p 0, 5.07 at 0.4) but still stays under the 20 step limit.
+- The full pipeline took about 7.5 minutes on the Windows laptop, including the parallel environments benchmark.
 
 ## Limitations
 - The task is small, so the learner reaches 100% and the sweep does not show a drop in success, only in steps.
