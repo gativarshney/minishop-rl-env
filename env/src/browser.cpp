@@ -77,9 +77,6 @@ void Browser::launch() {
         "--user-data-dir=" + temp_dir_,
         "--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage",
         "--no-first-run", "--no-default-browser-check",
-        // several tabs share one browser: keep background tabs running at full speed
-        "--disable-background-timer-throttling", "--disable-renderer-backgrounding",
-        "--disable-backgrounding-occluded-windows",
         "--window-size=1000,800", "about:blank"};
 
 #ifdef _WIN32
