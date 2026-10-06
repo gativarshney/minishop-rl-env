@@ -18,15 +18,18 @@ Click or wait. For the learner, an action is named by button text ("Add to cart"
 - Clicks are real `Input.dispatchMouseEvent` events at the button centre. A click on a covered or hidden button is still sent and simply does nothing, like for a user.
 - Cleanup: Linux uses its own process group and parent-death signal, Windows uses a Job Object with kill-on-close (taskkill as fallback). Verified by killing the env process hard and counting browsers with our profile dir.
 
+## Parallel environments (Part 5)
+One `minishop_env` process can hold several environments, picked by an `env` field in each request. Each gets its own browser window of the same Chrome and a thread. Same attempts are replayed for N = 1, 2, 4, 8 to compare wall time.
+
 ## Evaluation
 Training: 3 runs with different seeds, 300 attempts each, popup_p 0.15, delay_p 0.10, goals in shuffled blocks of 12. Evaluation seeds start at 100000, training seeds are below that. The Q agent is evaluated greedily (no learning) with 70 attempts per run, 210 total per condition. The random agent gets the same seeds and goals.
 
 ## Skipped
-- Part 5 (optional).
+- The Harbor task format (the other Part 5 option). I did the parallel environments option.
 - No hyperparameter search; one setting was used.
 - No test that Chrome versions other than the installed one work.
 
 ## What next
 - Harder pages (more popup kinds, moving buttons) so the agent is not at 100%.
 - A learner that does not need hand built state (small neural network over the button list).
-- Run attempts in parallel inside one process with several tabs.
+- Use the parallel environments inside training itself (training currently uses 3 separate processes).

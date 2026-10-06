@@ -7,6 +7,7 @@ A small shopping page, a C++ environment that drives it through raw Chrome DevTo
 - `env/`: C++17 program (CMake, IXWebSocket with TLS and zlib off, nlohmann/json). Starts headless Chrome or Edge once, talks CDP over a WebSocket, real mouse clicks, observation read live from the page. Speaks JSON lines on stdin/stdout.
 - `agents/`: random agent and Q-learning agent.
 - `scripts/run_all.py`: build, train 3 runs, evaluate, popup sweep, analyze. `scripts/analyze.py`: reads only the log and writes `report.md` and `charts/`.
+- `scripts/parallel_bench.py`: Part 5 extra, several environments (one browser window each) on one Chrome at the same time, with a speedup table in the report.
 - `scripts/test_env.py`, `scripts/test_cleanup.py`: smoke test (one full purchase) and a crash test (no browser left behind).
 
 ## Approach
@@ -37,6 +38,9 @@ Training attempts use seeds below 100000, evaluation attempts seeds from 100000.
 - One hyperparameter setting, no search.
 - Timing numbers depend on the machine.
 
+## Part 5 (extra)
+I picked the first option: several environments on one Chrome. The numbers are in the last section of `report.md`, computed from `logs/parallel.jsonl`. Each environment needs its own browser window; separate tabs in one window were throttled by Chrome when in the background and got slower, not faster.
+
 ## Pending
-- Part 5 (optional), not done.
+- The Harbor task format (the other Part 5 option) was not done.
 - Harder pages and a learner without hand built state (see `DECISIONS.md`).
