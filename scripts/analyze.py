@@ -271,30 +271,13 @@ def main():
     plt.close(fig)
     md.append("![latency](charts/latency.png)\n")
 
-    # ---------- 6. surprise (computed observations, to be rewritten by hand) ----------
-    md.append("## One thing that surprised me\n")
-    md.append("> Placeholder generated from the data by `scripts/analyze.py`. To be rewritten in my own words.\n")
-    q_ev = [e for e in ev if e["agent"] == "qlearning" and e["popup_p"] == DEFAULT_P]
-    r_ev = [e for e in ev if e["agent"] == "random" and e["popup_p"] == DEFAULT_P]
-    if q_ev:
-        wait_steps = [s for s in steps if s["action"] == "wait"]
-        wait_share_steps = len(wait_steps) / len(steps)
-        wait_share_time = sum(s["time_ms"] for s in wait_steps) / t.sum()
-        md.append(f"- Wait actions are {pct(wait_share_steps)} of all steps but {pct(wait_share_time)} of all step time.")
-        q_waits = np.mean([e["waits"] for e in q_ev])
-        md.append(f"- A trained Q-learning attempt uses {q_waits:.2f} wait actions on average.")
-    if q_ev and r_ev:
-        succ_q = [e["steps"] for e in q_ev if e["success"]]
-        succ_r = [e["steps"] for e in r_ev if e["success"]]
-        if succ_q:
-            md.append(f"- Successful Q-learning attempts took {np.mean(succ_q):.2f} steps on average"
-                      + (f"; successful random attempts took {np.mean(succ_r):.2f}." if succ_r else "; the random agent never succeeded."))
-        if r_ev:
-            r_wrong = Counter(failure_reason(e) for e in r_ev if not e["success"])
-            if r_wrong:
-                name, c = r_wrong.most_common(1)[0]
-                md.append(f"- The random agent's most common failure was `{name}` ({c} of {len(r_ev)} attempts).")
-    md.append("")
+    # ---------- 6. surprise (written by hand, kept in a tracked file so re-runs keep it) ----------
+    note_path = os.path.join(ROOT, "notes", "surprise.md")
+    if not os.path.exists(note_path):
+        raise SystemExit(f"missing {note_path}: write the 'One thing that surprised me' text there")
+    md.append("## One thing that surprised me" + chr(10))
+    with open(note_path) as f:
+        md.append(f.read().strip() + chr(10))
 
     # ---------- 7. extra: parallel environments on one browser ----------
     par_path = a.parallel or os.path.join(os.path.dirname(a.log), "parallel.jsonl")
