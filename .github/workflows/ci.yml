@@ -21,6 +21,14 @@ jobs:
       - name: Build environment
         timeout-minutes: 8
         run: python3 scripts/run_all.py --build-only
+      - name: Diagnose page modes
+        continue-on-error: true
+        timeout-minutes: 5
+        run: |
+          for m in initial tab window; do
+            MINISHOP_PAGE_MODE=$m bash scripts/ci_step.sh python3 scripts/test_env.py
+            echo "::notice::page mode $m exit code $?"
+          done
       - name: Smoke test (one purchase)
         timeout-minutes: 3
         run: bash scripts/ci_step.sh python3 scripts/test_env.py

@@ -137,6 +137,7 @@ void Browser::launch() {
     g_pgid = pid;
 #endif
     launched_ = true;
+    initial_used_ = false;
     generation_++;
 
     try {
@@ -208,9 +209,24 @@ void Browser::ensureLaunched() {
 // Each environment gets its own tab. Flatten mode lets one WebSocket carry all tab sessions.
 std::string Browser::newPage() {
     nlohmann::json out;
-    if (!rawSend("Target.createTarget", {{"url", "about:blank"}, {"newWindow", true}, {"width", 1000}, {"height", 800}}, "", 5000, out) || out.contains("error"))
-        throw std::runtime_error("createTarget failed");
-    std::string target_id = out["result"]["targetId"];
+    // MINISHOP_PAGE_MODE (for diagnosing browser differences): window (default), tab, initial
+    const char* mode_env = std::getenv("MINISHOP_PAGE_MODE");
+    std::string mode = mode_env ? mode_env : "window";
+    std::string target_id;
+    if (mode == "initial" && !initial_used_) {
+        // reuse the tab Chrome opened at startup
+        if (!rawSend("Target.getTargets", nlohmann::json::object(), "", 5000, out))
+            throw std::runtime_error("getTargets failed");
+        for (auto& t : out["result"]["targetInfos"])
+            if (t.value("type", "") == "page") { target_id = t["targetId"]; break; }
+        initial_used_ = true;
+    } else {
+        nlohmann::json params = {{"url", "about:blank"}};
+        if (mode != "tab") params.update({{"newWindow", true}, {"width", 1000}, {"height", 800}});
+        if (!rawSend("Target.createTarget", params, "", 5000, out) || out.contains("error"))
+            throw std::runtime_error("createTarget failed");
+        target_id = out["result"]["targetId"];
+    }
     if (!rawSend("Target.attachToTarget", {{"targetId", target_id}, {"flatten", true}}, "", 5000, out) ||
         out.contains("error"))
         throw std::runtime_error("attachToTarget failed");
