@@ -11,7 +11,7 @@ static long long msSince(Clock::time_point t) {
 
 json MinishopEnv::eval(const std::string& js, int timeout_ms) {
     auto t = Clock::now();
-    json res = browser_.sendCommand("Runtime.evaluate",
+    json res = browser_.sendCommand(session_, "Runtime.evaluate",
                                     {{"expression", js}, {"returnByValue", true}}, timeout_ms);
     cdp_ms_ += msSince(t);
     if (res["result"].contains("exceptionDetails"))
@@ -54,7 +54,11 @@ json MinishopEnv::reset(const std::string& item, int qty, int seed, double popup
     goal_ = item + " x" + std::to_string(qty);
 
     // Reuse the browser; relaunch only if it is not running (first call or after a crash).
-    if (!browser_.alive()) browser_.launch();
+    browser_.ensureLaunched();
+    if (session_.empty() || generation_ != browser_.generation()) {
+        generation_ = browser_.generation();
+        session_ = browser_.newPage();
+    }
 
     std::string path;
     for (char c : site_path_) {
@@ -68,8 +72,8 @@ json MinishopEnv::reset(const std::string& item, int qty, int seed, double popup
                       "&delay_p=" + std::to_string(delay_p);
     try {
         // go through about:blank so we can never read the previous attempt's page by mistake
-        browser_.sendCommand("Page.navigate", {{"url", "about:blank"}}, 5000);
-        browser_.sendCommand("Page.navigate", {{"url", url}}, 5000);
+        browser_.sendCommand(session_, "Page.navigate", {{"url", "about:blank"}}, 5000);
+        browser_.sendCommand(session_, "Page.navigate", {{"url", url}}, 5000);
         // wait until the new page has run its script (window.__state exists for this URL)
         auto t = Clock::now();
         const std::string check = "!!(window.__state && document.readyState === 'complete')";
@@ -78,7 +82,7 @@ json MinishopEnv::reset(const std::string& item, int qty, int seed, double popup
             std::this_thread::sleep_for(std::chrono::milliseconds(10));
         }
     } catch (...) {
-        browser_.close();  // a broken browser is replaced on the next reset
+        session_.clear();  // a broken tab is replaced by a new one on the next reset
         throw;
     }
     cdp_ms_ = 0;
@@ -99,10 +103,10 @@ json MinishopEnv::infoFromPage() const {
 // A real mouse click: move, press, release at the button centre through CDP.
 void MinishopEnv::realClick(double x, double y) {
     auto t = Clock::now();
-    browser_.sendCommand("Input.dispatchMouseEvent", {{"type", "mouseMoved"}, {"x", x}, {"y", y}});
-    browser_.sendCommand("Input.dispatchMouseEvent",
+    browser_.sendCommand(session_, "Input.dispatchMouseEvent", {{"type", "mouseMoved"}, {"x", x}, {"y", y}});
+    browser_.sendCommand(session_, "Input.dispatchMouseEvent",
                          {{"type", "mousePressed"}, {"x", x}, {"y", y}, {"button", "left"}, {"clickCount", 1}});
-    browser_.sendCommand("Input.dispatchMouseEvent",
+    browser_.sendCommand(session_, "Input.dispatchMouseEvent",
                          {{"type", "mouseReleased"}, {"x", x}, {"y", y}, {"button", "left"}, {"clickCount", 1}});
     cdp_ms_ += msSince(t);
 }
@@ -156,7 +160,7 @@ StepResult MinishopEnv::step(const std::string& action_type, int action_i) {
         settle();
     } catch (const std::exception& e) {
         // Timeouts or a dead browser end the attempt cleanly; the next reset relaunches.
-        browser_.close();
+        session_.clear();  // the next reset opens a fresh tab (and a fresh browser if it died)
         info["error"] = e.what();
         return {json{{"screen", "unknown"}, {"goal", goal_}, {"popup_showing", false},
                      {"buttons", json::array()}},

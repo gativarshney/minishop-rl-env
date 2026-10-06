@@ -16,7 +16,7 @@ def leftovers():
 env = Env()
 env.reset("blue-mug", 1, 1, 0.5, 0.5)
 print("browser processes while running:", leftovers())
-env.proc.kill()  # simulate a crash, no cleanup code can run
+env.process.proc.kill()  # simulate a crash, no cleanup code can run
 time.sleep(2)
 n = leftovers()
 print("browser processes after crash:", n)

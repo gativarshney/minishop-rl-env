@@ -17,15 +17,14 @@ struct StepResult {
 
 class MinishopEnv {
 public:
-    explicit MinishopEnv(const std::string& site_path) : site_path_(site_path) {}
+    // Several environments can share one browser; each one drives its own tab.
+    MinishopEnv(Browser& browser, const std::string& site_path) : browser_(browser), site_path_(site_path) {}
 
     // Opens the page fresh for one attempt. The browser itself is reused.
     // Returns {observation, info}; both are read from the live page.
     nlohmann::json reset(const std::string& item, int qty, int seed, double popup_p, double delay_p);
     // action_type is "click" (uses action_i) or "wait".
     StepResult step(const std::string& action_type, int action_i);
-
-    void close() { browser_.close(); }
 
     static constexpr int kMaxSteps = 20;
 
@@ -37,7 +36,9 @@ private:
     void realClick(double x, double y);
     void settle();
 
-    Browser browser_;
+    Browser& browser_;
+    std::string session_;  // this environment's tab
+    int generation_ = -1;  // browser generation the session belongs to
     std::string site_path_;
     std::string goal_;
     int steps_ = 0;

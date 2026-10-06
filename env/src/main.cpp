@@ -3,6 +3,13 @@
 #include <iostream>
 #include <string>
 #include <csignal>
+#include <map>
+#include <memory>
+#include <mutex>
+#include <thread>
+#include <vector>
+#include <atomic>
+#include <chrono>
 #ifdef _WIN32
 #include <windows.h>
 #endif
@@ -41,34 +48,64 @@ int main(int argc, char** argv) {
     std::signal(SIGPIPE, SIG_IGN);
 #endif
 
-    MinishopEnv env(site);  // its destructor closes the browser on normal exit
-    std::string line;
-    while (std::getline(std::cin, line)) {
-        if (line.empty()) continue;
+    Browser browser;  // one browser, declared first so it is destroyed last
+    // Environment slots, picked by the optional "env" field of a request (default 0).
+    // Each slot drives its own tab. The client sends one request per slot at a time.
+    std::map<int, std::unique_ptr<MinishopEnv>> slots;
+    std::atomic<int> running{0};  // requests still being handled
+    std::mutex out_mutex;
+
+    // Runs one request and prints one reply line. Runs in its own thread so that
+    // requests for different slots are handled at the same time.
+    auto handle = [&](MinishopEnv* env, int slot, json req) {
         json res;
         try {
-            json req = json::parse(line);
             std::string cmd = req.value("cmd", "");
             if (cmd == "reset") {
-                json r = env.reset(req.value("item", "blue-mug"), req.value("qty", 1), req.value("seed", 42),
-                                     req.value("popup_p", 0.0), req.value("delay_p", 0.0));
+                json r = env->reset(req.value("item", "blue-mug"), req.value("qty", 1), req.value("seed", 42),
+                                    req.value("popup_p", 0.0), req.value("delay_p", 0.0));
                 res = {{"status", "ok"}, {"observation", r["observation"]}, {"info", r["info"]}};
-            } else if (cmd == "step") {
-                StepResult r = env.step(req.value("action", "wait"), req.value("i", -1));
+            } else {
+                StepResult r = env->step(req.value("action", "wait"), req.value("i", -1));
                 res = {{"status", "ok"}, {"observation", r.observation}, {"reward", r.reward},
                        {"done", r.done}, {"truncated", r.truncated}, {"info", r.info},
                        {"time_ms", r.time_ms}, {"cdp_ms", r.cdp_ms}, {"settle_ms", r.settle_ms},
                        {"popup_showing", r.popup_showing}};
-            } else if (cmd == "close") {
-                break;
-            } else {
-                res = {{"status", "error"}, {"error", "unknown command"}};
             }
         } catch (const std::exception& e) {
             res = {{"status", "error"}, {"error", e.what()}};
         }
-        std::cout << res.dump() << std::endl;  // endl flushes so Python never waits on a buffer
+        res["env"] = slot;
+        {
+            std::lock_guard<std::mutex> lock(out_mutex);
+            std::cout << res.dump() << std::endl;  // endl flushes so Python never waits on a buffer
+        }
+        running--;
+    };
+
+    std::string line;
+    while (std::getline(std::cin, line)) {
+        if (line.empty()) continue;
+        json req = json::parse(line, nullptr, false);
+        if (req.is_discarded()) {
+            std::lock_guard<std::mutex> lock(out_mutex);
+            std::cout << json{{"status", "error"}, {"error", "bad json"}}.dump() << std::endl;
+            continue;
+        }
+        std::string cmd = req.value("cmd", "");
+        if (cmd == "close") break;
+        if (cmd != "reset" && cmd != "step") {
+            std::lock_guard<std::mutex> lock(out_mutex);
+            std::cout << json{{"status", "error"}, {"error", "unknown command"}}.dump() << std::endl;
+            continue;
+        }
+        int slot = req.value("env", 0);
+        auto& env = slots[slot];
+        if (!env) env = std::make_unique<MinishopEnv>(browser, site);
+        running++;
+        std::thread(handle, env.get(), slot, req).detach();  // detached so finished threads are freed
     }
-    env.close();
+    while (running > 0) std::this_thread::sleep_for(std::chrono::milliseconds(5));  // let running requests finish before the browser goes away
+    browser.close();
     return 0;
 }

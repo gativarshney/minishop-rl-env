@@ -77,6 +77,9 @@ void Browser::launch() {
         "--user-data-dir=" + temp_dir_,
         "--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage",
         "--no-first-run", "--no-default-browser-check",
+        // several tabs share one browser: keep background tabs running at full speed
+        "--disable-background-timer-throttling", "--disable-renderer-backgrounding",
+        "--disable-backgrounding-occluded-windows",
         "--window-size=1000,800", "about:blank"};
 
 #ifdef _WIN32
@@ -134,6 +137,7 @@ void Browser::launch() {
     g_pgid = pid;
 #endif
     launched_ = true;
+    generation_++;
 
     try {
         std::string ws_url = readWsUrl((std::filesystem::path(temp_dir_) / "DevToolsActivePort").string(), 15000);
@@ -167,17 +171,6 @@ void Browser::launch() {
         if (fut.wait_for(std::chrono::seconds(10)) != std::future_status::ready || !fut.get())
             throw std::runtime_error("DevTools WebSocket connect failed");
 
-        // Browser-level socket: find the page and attach to it (flatten = one socket for all).
-        nlohmann::json out;
-        if (!rawSend("Target.getTargets", nlohmann::json::object(), "", 5000, out))
-            throw std::runtime_error("getTargets timed out");
-        std::string target_id;
-        for (auto& t : out["result"]["targetInfos"])
-            if (t.value("type", "") == "page") { target_id = t["targetId"]; break; }
-        if (target_id.empty()) throw std::runtime_error("no page target");
-        if (!rawSend("Target.attachToTarget", {{"targetId", target_id}, {"flatten", true}}, "", 5000, out))
-            throw std::runtime_error("attach timed out");
-        session_id_ = out["result"]["sessionId"];
     } catch (...) {
         close();  // never leave a half started browser behind
         throw;
@@ -205,9 +198,34 @@ bool Browser::rawSend(const std::string& method, const nlohmann::json& params,
     return true;
 }
 
-nlohmann::json Browser::sendCommand(const std::string& method, const nlohmann::json& params, int timeout_ms) {
+void Browser::ensureLaunched() {
+    std::lock_guard<std::mutex> lock(launch_mutex_);
+    if (launched_ && webSocket_.getReadyState() == ix::ReadyState::Open) return;
+    if (launched_) close();  // browser died: clean up before starting a new one
+    launch();
+}
+
+// Each environment gets its own tab. Flatten mode lets one WebSocket carry all tab sessions.
+std::string Browser::newPage() {
     nlohmann::json out;
-    if (!rawSend(method, params, session_id_, timeout_ms, out))
+    if (!rawSend("Target.createTarget", {{"url", "about:blank"}, {"newWindow", true}, {"width", 1000}, {"height", 800}}, "", 5000, out) || out.contains("error"))
+        throw std::runtime_error("createTarget failed");
+    std::string target_id = out["result"]["targetId"];
+    if (!rawSend("Target.attachToTarget", {{"targetId", target_id}, {"flatten", true}}, "", 5000, out) ||
+        out.contains("error"))
+        throw std::runtime_error("attachToTarget failed");
+    std::string session = out["result"]["sessionId"];
+    // Same viewport for every tab, and tabs in the background must behave like a focused one.
+    sendCommand(session, "Emulation.setDeviceMetricsOverride",
+                {{"width", 1000}, {"height", 800}, {"deviceScaleFactor", 1}, {"mobile", false}});
+    sendCommand(session, "Emulation.setFocusEmulationEnabled", {{"enabled", true}});
+    return session;
+}
+
+nlohmann::json Browser::sendCommand(const std::string& session, const std::string& method,
+                                    const nlohmann::json& params, int timeout_ms) {
+    nlohmann::json out;
+    if (!rawSend(method, params, session, timeout_ms, out))
         throw std::runtime_error("CDP timeout: " + method);
     if (out.contains("error"))
         throw std::runtime_error("CDP error in " + method + ": " + out["error"].dump());
@@ -251,7 +269,6 @@ void Browser::close() {
         }
         temp_dir_.clear();
     }
-    session_id_.clear();
 }
 
 void Browser::emergencyKill() {
