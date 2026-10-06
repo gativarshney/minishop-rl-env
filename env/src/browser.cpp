@@ -215,10 +215,6 @@ std::string Browser::newPage() {
         out.contains("error"))
         throw std::runtime_error("attachToTarget failed");
     std::string session = out["result"]["sessionId"];
-    // Same viewport for every tab, and tabs in the background must behave like a focused one.
-    sendCommand(session, "Emulation.setDeviceMetricsOverride",
-                {{"width", 1000}, {"height", 800}, {"deviceScaleFactor", 1}, {"mobile", false}});
-    sendCommand(session, "Emulation.setFocusEmulationEnabled", {{"enabled", true}});
     return session;
 }
 
