@@ -22,13 +22,19 @@ jobs:
         run: python3 scripts/run_all.py --build-only
       - name: Smoke test (one purchase)
         timeout-minutes: 3
-        run: python3 scripts/test_env.py
+        run: |
+          python3 scripts/test_env.py > step.log 2>&1 || { echo "::error::$(tail -c 900 step.log | tr '
+' ' ')"; exit 1; }
       - name: Cleanup test (no browser left behind)
         timeout-minutes: 3
-        run: python3 scripts/test_cleanup.py
+        run: |
+          python3 scripts/test_cleanup.py > step.log 2>&1 || { echo "::error::$(tail -c 900 step.log | tr '
+' ' ')"; exit 1; }
       - name: Parallel environments check
         timeout-minutes: 3
-        run: python3 scripts/parallel_bench.py --episodes 8 --envs 1 2 --out /tmp/parallel_check.jsonl
+        run: |
+          python3 scripts/parallel_bench.py --episodes 8 --envs 1 2 --out /tmp/parallel_check.jsonl > step.log 2>&1 || { echo "::error::$(tail -c 900 step.log | tr '
+' ' ')"; exit 1; }
       - name: Build, train, evaluate, analyze
         timeout-minutes: 15
         run: ./run.sh
