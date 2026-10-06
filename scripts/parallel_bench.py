@@ -33,7 +33,7 @@ def episode(env, ep):
 def run(n_envs, episodes):
     proc = EnvProcess()  # one browser for all tabs
     envs = [Env(proc, w) for w in range(n_envs)]
-    for e in envs:  # warm up: opens every tab before the clock starts
+    for e in envs:  # warm up: opens every window before the clock starts
         e.reset("blue-mug", 1, 0, 0.0, 0.0)
     results = [None] * episodes
 
