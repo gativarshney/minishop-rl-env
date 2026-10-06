@@ -17,7 +17,7 @@ struct StepResult {
 
 class MinishopEnv {
 public:
-    // Several environments can share one browser; each one drives its own tab.
+    // Several environments can share one browser; each one drives its own window.
     MinishopEnv(Browser& browser, const std::string& site_path) : browser_(browser), site_path_(site_path) {}
 
     // Opens the page fresh for one attempt. The browser itself is reused.
@@ -37,7 +37,7 @@ private:
     void settle();
 
     Browser& browser_;
-    std::string session_;  // this environment's tab
+    std::string session_;  // CDP session of this environment's window
     int generation_ = -1;  // browser generation the session belongs to
     std::string site_path_;
     std::string goal_;

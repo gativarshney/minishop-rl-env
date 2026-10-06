@@ -50,7 +50,7 @@ int main(int argc, char** argv) {
 
     Browser browser;  // one browser, declared first so it is destroyed last
     // Environment slots, picked by the optional "env" field of a request (default 0).
-    // Each slot drives its own tab. The client sends one request per slot at a time.
+    // Each slot drives its own window. The client sends one request per slot at a time.
     std::map<int, std::unique_ptr<MinishopEnv>> slots;
     std::atomic<int> running{0};  // requests still being handled
     std::mutex out_mutex;

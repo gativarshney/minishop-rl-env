@@ -23,7 +23,7 @@ def find_exe():
 
 
 class EnvProcess:
-    """One minishop_env process (one Chrome). Several Env objects can share it, one tab each."""
+    """One minishop_env process (one Chrome). Several Env objects can share it, one window each."""
 
     def __init__(self):
         self.proc = subprocess.Popen([find_exe(), "--site", SITE], stdin=subprocess.PIPE,

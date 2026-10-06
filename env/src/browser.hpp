@@ -20,7 +20,7 @@ public:
     // Increases every time the browser is (re)started; old page sessions are then invalid.
     int generation() const { return generation_; }
 
-    // Opens a new tab in the same browser and returns its CDP session id.
+    // Opens a new window in the same browser and returns its CDP session id.
     std::string newPage();
 
     // Sends a CDP command to one page (session) and waits at most timeout_ms for the reply.

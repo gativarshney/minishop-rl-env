@@ -82,7 +82,7 @@ json MinishopEnv::reset(const std::string& item, int qty, int seed, double popup
             std::this_thread::sleep_for(std::chrono::milliseconds(10));
         }
     } catch (...) {
-        session_.clear();  // a broken tab is replaced by a new one on the next reset
+        session_.clear();  // a broken window is replaced by a new one on the next reset
         throw;
     }
     cdp_ms_ = 0;
@@ -160,7 +160,7 @@ StepResult MinishopEnv::step(const std::string& action_type, int action_i) {
         settle();
     } catch (const std::exception& e) {
         // Timeouts or a dead browser end the attempt cleanly; the next reset relaunches.
-        session_.clear();  // the next reset opens a fresh tab (and a fresh browser if it died)
+        session_.clear();  // the next reset opens a fresh window (and a fresh browser if it died)
         info["error"] = e.what();
         return {json{{"screen", "unknown"}, {"goal", goal_}, {"popup_showing", false},
                      {"buttons", json::array()}},

@@ -207,7 +207,7 @@ void Browser::ensureLaunched() {
     launch();
 }
 
-// Each environment gets its own tab. Flatten mode lets one WebSocket carry all tab sessions.
+// Each environment gets its own window. Flatten mode lets one WebSocket carry all their sessions.
 std::string Browser::newPage() {
     nlohmann::json out;
     // A separate window per environment: background tabs of one window get throttled by Chrome.
