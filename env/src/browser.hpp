@@ -41,7 +41,6 @@ private:
 
     ix::WebSocket webSocket_;
     int generation_ = 0;
-    bool initial_used_ = false;
     std::mutex launch_mutex_;
     int next_id_ = 1;
     bool launched_ = false;

@@ -77,7 +77,10 @@ void Browser::launch() {
         "--user-data-dir=" + temp_dir_,
         "--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage",
         "--no-first-run", "--no-default-browser-check",
-        "--window-size=1000,800", "--enable-logging=stderr", "about:blank"};
+        // several windows share one browser: keep background windows running at full speed
+        "--disable-background-timer-throttling", "--disable-renderer-backgrounding",
+        "--disable-backgrounding-occluded-windows",
+        "--window-size=1000,800", "about:blank"};
 
 #ifdef _WIN32
     // Build one command line; every argument is quoted so paths with spaces survive.
@@ -120,14 +123,13 @@ void Browser::launch() {
     if (pid < 0) throw std::runtime_error("fork failed");
     if (pid == 0) {
         setsid();                          // own process group so kill(-pgid) gets every child
+        // PDEATHSIG fires when the *thread* that forked exits, so the fork must happen on the
+        // main thread (main.cpp launches the browser there), which lives as long as the env.
         prctl(PR_SET_PDEATHSIG, SIGKILL);  // die with the env even if it crashes
         int devnull = open("/dev/null", O_RDWR);
         dup2(devnull, 0);
         dup2(devnull, 1);  // stdout is our JSON channel, Chrome must not write to it
-        // MINISHOP_CHROME_LOG: keep Chrome's own messages in a file, for diagnosing crashes
-        const char* log_path = std::getenv("MINISHOP_CHROME_LOG");
-        int err_fd = log_path ? open(log_path, O_WRONLY | O_CREAT | O_APPEND, 0644) : -1;
-        dup2(err_fd >= 0 ? err_fd : devnull, 2);
+        dup2(devnull, 2);
         std::vector<char*> argv;
         for (auto& a : args) argv.push_back(const_cast<char*>(a.c_str()));
         argv.push_back(nullptr);
@@ -137,7 +139,6 @@ void Browser::launch() {
     g_pgid = pid;
 #endif
     launched_ = true;
-    initial_used_ = false;
     generation_++;
 
     try {
@@ -209,24 +210,12 @@ void Browser::ensureLaunched() {
 // Each environment gets its own tab. Flatten mode lets one WebSocket carry all tab sessions.
 std::string Browser::newPage() {
     nlohmann::json out;
-    // MINISHOP_PAGE_MODE (for diagnosing browser differences): window (default), tab, initial
-    const char* mode_env = std::getenv("MINISHOP_PAGE_MODE");
-    std::string mode = mode_env ? mode_env : "window";
-    std::string target_id;
-    if (mode == "initial" && !initial_used_) {
-        // reuse the tab Chrome opened at startup
-        if (!rawSend("Target.getTargets", nlohmann::json::object(), "", 5000, out))
-            throw std::runtime_error("getTargets failed");
-        for (auto& t : out["result"]["targetInfos"])
-            if (t.value("type", "") == "page") { target_id = t["targetId"]; break; }
-        initial_used_ = true;
-    } else {
-        nlohmann::json params = {{"url", "about:blank"}};
-        if (mode != "tab") params.update({{"newWindow", true}, {"width", 1000}, {"height", 800}});
-        if (!rawSend("Target.createTarget", params, "", 5000, out) || out.contains("error"))
-            throw std::runtime_error("createTarget failed");
-        target_id = out["result"]["targetId"];
-    }
+    // A separate window per environment: background tabs of one window get throttled by Chrome.
+    if (!rawSend("Target.createTarget",
+                 {{"url", "about:blank"}, {"newWindow", true}, {"width", 1000}, {"height", 800}}, "", 5000, out) ||
+        out.contains("error"))
+        throw std::runtime_error("createTarget failed");
+    std::string target_id = out["result"]["targetId"];
     if (!rawSend("Target.attachToTarget", {{"targetId", target_id}, {"flatten", true}}, "", 5000, out) ||
         out.contains("error"))
         throw std::runtime_error("attachToTarget failed");

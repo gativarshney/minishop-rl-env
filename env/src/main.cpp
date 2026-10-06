@@ -99,6 +99,11 @@ int main(int argc, char** argv) {
             std::cout << json{{"status", "error"}, {"error", "unknown command"}}.dump() << std::endl;
             continue;
         }
+        if (cmd == "reset") {
+            // Start (or restart) the browser here on the main thread: on Linux the browser is
+            // tied to the thread that started it, and worker threads end after every request.
+            try { browser.ensureLaunched(); } catch (...) {}  // the worker reports the error
+        }
         int slot = req.value("env", 0);
         auto& env = slots[slot];
         if (!env) env = std::make_unique<MinishopEnv>(browser, site);
