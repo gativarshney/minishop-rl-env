@@ -16,7 +16,21 @@ jobs:
         run: pip install -r requirements.txt
       - name: Check browser
         run: $CHROME_BIN --version
+      # Small steps first so a failure shows which part broke
+      - name: Build environment
+        timeout-minutes: 8
+        run: python3 scripts/run_all.py --build-only
+      - name: Smoke test (one purchase)
+        timeout-minutes: 3
+        run: python3 scripts/test_env.py
+      - name: Cleanup test (no browser left behind)
+        timeout-minutes: 3
+        run: python3 scripts/test_cleanup.py
+      - name: Parallel environments check
+        timeout-minutes: 3
+        run: python3 scripts/parallel_bench.py --episodes 8 --envs 1 2 --out /tmp/parallel_check.jsonl
       - name: Build, train, evaluate, analyze
+        timeout-minutes: 15
         run: ./run.sh
       - name: Upload results
         if: always()

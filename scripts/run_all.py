@@ -116,12 +116,15 @@ def main():
     ap.add_argument("--eval-per-run", type=int, default=70)  # 3 runs x 70 = 210 attempts per condition
     ap.add_argument("--runs", type=int, default=3)
     ap.add_argument("--skip-build", action="store_true")
+    ap.add_argument("--build-only", action="store_true", help="only build the environment")
     ap.add_argument("--skip-bench", action="store_true", help="skip the parallel environments benchmark")
     ap.add_argument("--out", default=os.path.join(LOG_DIR, "run.jsonl"))
     a = ap.parse_args()
     t0 = time.time()
     if not a.skip_build:
         build()
+    if a.build_only:
+        return
     shutil.rmtree(PART_DIR, ignore_errors=True)
     jobs = [(r, a.train_episodes, a.eval_per_run, SWEEP_POPUPS) for r in range(a.runs)]
     with mp.Pool(a.runs) as pool:  # runs are independent, so they use separate browsers in parallel

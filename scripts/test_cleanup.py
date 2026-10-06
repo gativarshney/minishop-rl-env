@@ -9,7 +9,7 @@ def leftovers():
         cmd = ["powershell", "-NoProfile", "-Command",
                "(Get-CimInstance Win32_Process | Where-Object { $_.Name -match 'chrome|msedge' -and $_.CommandLine -like '*minishop_profile_*' } | Measure-Object).Count"]
     else:
-        cmd = ["sh", "-c", "pgrep -fc 'chrome.*minishop_profile_' || true"]
+        cmd = ["sh", "-c", "pgrep -fc '[c]hrome.*minishop_profile_' || true"]
     return int(subprocess.run(cmd, capture_output=True, text=True).stdout.strip() or 0)
 
 
